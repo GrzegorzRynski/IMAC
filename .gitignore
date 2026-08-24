@@ -1,0 +1,22 @@
+#virtual env
+.venv/
+venv/
+ENV/
+
+#config
+.idea/
+.vscode/
+
+#tmp & cashe
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+#sys & logs
+*.log
+
+#sources
+sources/
+
+#data
+data/
