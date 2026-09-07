@@ -1,7 +1,11 @@
 
 import pandas as pd
 from pathlib import Path
-from src.load_data import load_csv, describe_df
+
+from evaluation.evaluation import evaluate_numeric_imputation, evaluate_categorical_imputation, \
+    confusion_matrix_imputation
+from imp_methods.base_imp_methods import impute_mean, impute_mode
+from src.load_data import load_data_file
 from src.init_analitics.init_analytics import *
 from src.miss_sims.missingness import *
 import matplotlib.pyplot as plt
@@ -15,11 +19,9 @@ def main():
         print(f"Brak pliku {csv_path.name} w katalogu data.")
         return
 
-    df = load_csv(csv_path)
+    df = load_data_file(csv_path)
     #print("Pierwsze wiersze danych:")
     #print(df.head())
-
-    #describe_df(df)
 
     # df['age'].hist(bins=20)
     # plt.title("Rozkład wieku")
@@ -36,7 +38,7 @@ def main():
 
     print("--------------------------")
     #print(column_types)
-    #print(missing_summ)
+    print(missing_summ)
     #print(basic_stat)
     #print(corr_matrix)
     #print(rep)
@@ -67,7 +69,7 @@ def main():
 
     nmar_rep = report(df_nmar)
 
-    df_missing, mask = apply_missingness_pipeline(
+    df_missing, missing_mask = apply_missingness_pipeline(
         df,
         mcar_rate=0.05,
 
@@ -83,7 +85,16 @@ def main():
     )
 
     df_missing_rep = report(df_missing)
-    print(df_missing_rep)
+    #print(df_missing_rep)
+
+    df_inputted_num, inp1_mask = impute_mean(df_missing, column_types["numeric"])
+    df_inputted_cat, inp2_mask = impute_mode(df_inputted_num, column_types["categorical"])
+
+    num_eval = evaluate_numeric_imputation(df, df_inputted_cat, missing_mask, column_types["numeric"])
+    cat_eval = evaluate_categorical_imputation(df, df_inputted_cat, missing_mask, column_types["categorical"])
+    conf_matrix = confusion_matrix_imputation(df, df_inputted_cat, missing_mask, column_types["categorical"])
+
+    #print(num_eval)
 
 if __name__ == "__main__":
     main()

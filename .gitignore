@@ -20,3 +20,6 @@ sources/
 
 #data
 data/
+
+#appdata
+app_data.json

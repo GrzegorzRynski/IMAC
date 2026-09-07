@@ -15,13 +15,11 @@ def infer_column_types(df: pd.DataFrame, cat_threshold: int = 20) -> Dict[str, L
     text = []
 
     for col in df.columns:
-        ser = df[col]  # column as pandas Series
+        ser = df[col]
 
-        # Check if column is numeric
         if pd.api.types.is_numeric_dtype(ser):
             numeric.append(col)
         else:
-            # Count unique non-null values to decide categorical vs text
             nunique = ser.nunique(dropna=True)
             if nunique <= cat_threshold:
                 categorical.append(col)
@@ -38,23 +36,21 @@ def missing_summary(df: pd.DataFrame, unusual_tokens: List[str] | None = None) -
     if unusual_tokens is None:
         unusual_tokens = ["?", "-9", "NA", "N/A", "nan"]
 
-    total = len(df)  # number of rows
-    miss_count = df.isnull().sum()  # count of NaN per column
-    miss_pct = (miss_count / total) * 100  # percentage of missing values
+    total = len(df)
+    miss_count = df.isnull().sum()
+    miss_pct = (miss_count / total) * 100
 
-    unusual = {}  # store unusual token counts per column
+    unusual = {}
 
     for col in df.columns:
-        ser = df[col].astype(str)  # convert to string for token comparison
+        ser = df[col].astype(str)
         count = 0
 
-        # Count occurrences of unusual tokens
         for tok in unusual_tokens:
             count += ser.str.strip().eq(tok).sum()
 
         unusual[col] = count
 
-    # Build summary DataFrame
     res = pd.DataFrame({
         "missing_count": miss_count,
         "missing_pct": miss_pct,
@@ -70,10 +66,8 @@ def basic_stats(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """
     types = infer_column_types(df)
 
-    # Numeric stats (mean, std, min, quartiles, max)
     numeric = df[types["numeric"]].describe().transpose() if types["numeric"] else pd.DataFrame()
 
-    # Categorical stats (count, unique, top, freq)
     categorical = df[types["categorical"]].describe().transpose() if types["categorical"] else pd.DataFrame()
 
     return {"numeric": numeric, "categorical": categorical}
