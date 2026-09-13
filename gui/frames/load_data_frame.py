@@ -68,7 +68,7 @@ class LoadDataView(ctk.CTkFrame):
         refresh_btn = ctk.CTkButton(btn_frame, text="Refresh", command=self.refresh_known)
         refresh_btn.pack(side="left", padx=(5,10))
 
-        self.app.manager.register_update_callback(self.show_current_info)
+        self.app.manager.register_load_callback(self.show_current_info)
 
         self.update_known_list()
         self.show_current_info()
@@ -168,7 +168,7 @@ class LoadDataView(ctk.CTkFrame):
 
     def show_current_info(self):
 
-        df = self.app.manager.current_df
+        df = self.app.manager.original_df
 
         if df is not None:
             self.current_info_name_label.grid(row=0, column=0, sticky="w", padx=(0, 10), pady=5, columnspan=1)

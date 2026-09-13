@@ -1,10 +1,15 @@
 import customtkinter as ctk
 from tkinter import ttk
 
+import numpy as np
 import pandas as pd
 from pandas.core.computation import align
 
+from gui.components.correlation_functions import cramers_v, correlation_ratio
 from init_analitics.init_analytics import report
+
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
 class OverviewView(ctk.CTkFrame):
@@ -15,26 +20,40 @@ class OverviewView(ctk.CTkFrame):
         self.page_size = 1000
         self.current_page = 0
         self.filtered_df = None
+        self.charts_loaded = False
+        self.correlation_loaded = False
+        self.missing_loaded = False
 
         # --- TITLE ---
         title = ctk.CTkLabel(self, text="Dataset Overview", font=("Arial", 24, "bold"))
         title.pack(pady=(10, 20))
 
         # --- NAME DISPLAY ---
-        self.name_label = ctk.CTkLabel(self, text="No Dataset Selected", font=("Arial", 16), wraplength=1200)
+        self.name_label = ctk.CTkLabel(self, text="No Dataset Selected", font=("Arial", 22, "bold"), wraplength=1200)
         self.name_label.pack(pady=10)
 
         # --- INFO BAR ---
         self.info_label = ctk.CTkLabel(self, text="", font=("Arial", 16))
         self.info_label.pack(pady=10)
 
-        self.tabs = ctk.CTkTabview(self, fg_color="transparent")
+        self.tabs = ctk.CTkTabview(self, fg_color="transparent", command=self.check_charts)
         self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
 
         tables_tab = self.tabs.add("Tables")
         tables_tab.configure(fg_color="transparent")
 
         moreinfo_tab = self.tabs.add("More Info")
+
+        charts_tab = self.tabs.add("Charts")
+        charts_tab.configure(fg_color="transparent")
+
+        correlation_tab = self.tabs.add("Correlation")
+        correlation_tab.configure(fg_color="transparent")
+
+        missing_tab = self.tabs.add("Missing Patterns")
+        missing_tab.configure(fg_color="transparent")
+
+        distributions_tab = self.tabs.add("Distributions")
 
         # --- SEARCH BAR ---
         search_frame = ctk.CTkFrame(tables_tab, fg_color="transparent")
@@ -171,22 +190,6 @@ class OverviewView(ctk.CTkFrame):
 
         self.stats_scroll_y.configure(command=self.stats_table.yview)
 
-        # Define columns
-
-        self.stats_table["columns"] = ("Column", "Type", "Missing", "Missing %", "Unusual")
-
-        self.stats_table.heading("Column", text="Column")
-        self.stats_table.heading("Type", text="Type")
-        self.stats_table.heading("Missing", text="Missing")
-        self.stats_table.heading("Missing %", text="Missing %")
-        self.stats_table.heading("Unusual", text="Unusual Tokens")
-
-        self.stats_table.column("Column", width=100, anchor="w")
-        self.stats_table.column("Type", width=60, anchor="w")
-        self.stats_table.column("Missing", width=60, anchor="center")
-        self.stats_table.column("Missing %", width=80, anchor="center")
-        self.stats_table.column("Unusual", width=80, anchor="center")
-
         reset_btn = ctk.CTkButton(
             tables_tab,
             text="Reset Tables",
@@ -198,11 +201,64 @@ class OverviewView(ctk.CTkFrame):
 
         # Register auto-update
         self.app.manager.register_update_callback(self.update_view)
+        self.app.manager.register_load_callback(self.load_update)
 
         # ---------------------- MORE INFO ---------------------------------------------------------
 
         self.moreinfo_frame = ctk.CTkScrollableFrame(moreinfo_tab, fg_color="transparent")
         self.moreinfo_frame.pack(fill="both", expand=True, padx=50, pady=50)
+
+        # ---------------------- CHARTS TAB ---------------------------------------------------------
+
+        charts_container = ctk.CTkFrame(charts_tab, fg_color="transparent")
+        charts_container.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Column selector
+        selector_label = ctk.CTkLabel(
+            charts_container,
+            text="Select column:",
+            font=("Arial", 16)
+        )
+        selector_label.pack(anchor="w", pady=(0, 5))
+
+        self.chart_column_var = ctk.StringVar()
+
+        self.chart_selector = ctk.CTkComboBox(
+            charts_container,
+            variable=self.chart_column_var,
+            values=[],
+            width=300,
+            command=self.update_charts
+        )
+        self.chart_selector.pack(anchor="w", pady=(0, 20))
+
+        # Chart display area
+        self.chart_frame = ctk.CTkFrame(charts_container, fg_color="transparent")
+        self.chart_frame.pack(fill="both", expand=True)
+
+        # ---------------------- CORRELATION TAB ---------------------------------------------------------
+
+        correlation_container = ctk.CTkFrame(correlation_tab, fg_color="transparent")
+        correlation_container.pack(fill="both", expand=True, padx=20, pady=20)
+
+        self.corr_type_var = ctk.StringVar(value="Full")
+        self.prev_corr_selection = ""
+
+        corr_selector = ctk.CTkComboBox(
+            correlation_container,
+            variable=self.corr_type_var,
+            values=["Full", "Numeric", "Categorical"],
+            width=300,
+            command=lambda _: self.update_correlation()
+        )
+        corr_selector.pack(anchor="w", padx=20, pady=(10, 5))
+
+        self.correlation_frame = ctk.CTkFrame(correlation_container, fg_color="transparent")
+        self.correlation_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # ---------------------- MISSING TAB ---------------------------------------------------------
+        self.missing_frame = ctk.CTkFrame(missing_tab, fg_color="transparent")
+        self.missing_frame.pack(fill="both", expand=True, padx=20, pady=20)
 
         # Initial update
         self.update_view()
@@ -352,18 +408,18 @@ class OverviewView(ctk.CTkFrame):
         self.current_page = 0
         self.load_page()
 
+    def load_update(self):
+        self.charts_loaded = False
+        self.correlation_loaded = False
+        self.missing_loaded = False
+        self.check_charts()
+
     def update_view(self):
         df = self.app.manager.current_df
 
-        # Clear tables
-        for row in self.table.get_children():
-            self.table.delete(row)
-
-        for row in self.stats_table.get_children():
-            self.stats_table.delete(row)
-
         if df is None:
             self.info_label.pack_forget()
+            self.tabs.pack_forget()
             self.name_label.configure(text="No Dataset Loaded")
             self.table["columns"] = []
             self.stats_table["columns"] = []
@@ -374,8 +430,6 @@ class OverviewView(ctk.CTkFrame):
 
         # --- REPORT ---
         df_report = report(df)
-        missing_df = df_report["missing"]
-        types_dict = df_report["types"]
 
         # --- INFO BAR ---
         missing_percent = df.isna().sum().sum() / df.size * 100
@@ -384,6 +438,31 @@ class OverviewView(ctk.CTkFrame):
             text=f"Rows: {len(df)} | Columns: {len(df.columns)} | "
                  f"Missing: {missing_percent:.2f}%"
         )
+
+        # --- TABS ---
+        self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.update_tables(df, df_report)
+
+        self.update_more_info(df_report)
+
+        self.chart_selector.configure(values=list(df.columns))
+        self.update_charts()
+
+        self.update_correlation()
+
+        self.update_missing_patterns()
+
+    def update_tables(self, df, df_report):
+        missing_df = df_report["missing"]
+        types_dict = df_report["types"]
+
+        # Clear tables
+        for row in self.table.get_children():
+            self.table.delete(row)
+
+        for row in self.stats_table.get_children():
+            self.stats_table.delete(row)
 
         # --- MAIN DATA TABLE ---
         self.table["columns"] = ["Index"] + list(df.columns)
@@ -399,9 +478,9 @@ class OverviewView(ctk.CTkFrame):
             values = list(row.values)
 
             if any(v is None or (isinstance(v, float) and pd.isna(v)) for v in values):
-                self.table.insert("", "end", values=[index+1] + list(row.values), tags=("missing_row",))
+                self.table.insert("", "end", values=[index + 1] + list(row.values), tags=("missing_row",))
             else:
-                self.table.insert("", "end", values=[index+1] + list(row.values))
+                self.table.insert("", "end", values=[index + 1] + list(row.values))
 
         for col in df.columns:
             self.table.heading(col, text=col, command=lambda c=col: self.sort_treeview(self.table, c, False))
@@ -420,14 +499,21 @@ class OverviewView(ctk.CTkFrame):
 
             self.stats_table.insert("", "end", values=(col, dtype, miss, miss_pct, unusual))
 
+        self.stats_table["columns"] = ("Column", "Type", "Missing", "Missing %", "Unusual")
+
+        self.stats_table.column("Column", width=100, anchor="w")
+        self.stats_table.column("Type", width=60, anchor="w")
+        self.stats_table.column("Missing", width=60, anchor="center")
+        self.stats_table.column("Missing %", width=80, anchor="center")
+        self.stats_table.column("Unusual", width=80, anchor="center")
+
         for col in ("Column", "Type", "Missing", "Missing %", "Unusual"):
-            self.stats_table.heading(col, text=col, command=lambda c=col: self.sort_treeview(self.stats_table, c, False))
+            self.stats_table.heading(col, text=col,
+                                     command=lambda c=col: self.sort_treeview(self.stats_table, c, False))
 
         self.current_page = 0
         self.filtered_df = None
         self.load_page()
-
-        self.update_more_info(df_report)
 
     def update_more_info(self, df_report):
         # Clear previous content
@@ -515,13 +601,13 @@ class OverviewView(ctk.CTkFrame):
                 item = ctk.CTkLabel(types_frame, text=f"• {col}", font=("Arial", 14))
                 item.pack(anchor="w", padx=20)
 
-        # --- UNIQUE VALUES ---
+        # --- Categorical Values ---
         unique_frame = ctk.CTkFrame(self.moreinfo_frame)
         unique_frame.pack(fill="x", pady=10, padx=10)
 
         unique_title = ctk.CTkLabel(
             unique_frame,
-            text="Unique Categorical Values",
+            text="Categorical Values",
             font=("Arial", 20, "bold")
         )
         unique_title.pack(anchor="w", pady=(0, 10), padx=10)
@@ -606,5 +692,493 @@ class OverviewView(ctk.CTkFrame):
                         font=("Arial", 13, "italic")
                     )
                     more_label.pack(anchor="w")
+
+        # --- NUMERIC STATS ---
+        numeric_frame = ctk.CTkFrame(self.moreinfo_frame)
+        numeric_frame.pack(fill="x", pady=10, padx=10)
+
+        numeric_title = ctk.CTkLabel(
+            numeric_frame,
+            text="Numeric Statistics",
+            font=("Arial", 20, "bold")
+        )
+        numeric_title.pack(anchor="w", pady=(0, 10), padx=10)
+
+        df = self.app.manager.current_df
+        types_dict = df_report["types"]
+
+        numeric_cols = types_dict["numeric"]
+
+        if len(numeric_cols) == 0:
+            no_num_label = ctk.CTkLabel(
+                numeric_frame,
+                text="No numeric columns found.",
+                font=("Arial", 16)
+            )
+            no_num_label.pack(anchor="w", pady=5, padx=15)
+        else:
+            for col in numeric_cols:
+                series = df[col].dropna()
+
+                if len(series) == 0:
+                    empty_label = ctk.CTkLabel(
+                        numeric_frame,
+                        text=f"{col}: No numeric data available.",
+                        font=("Arial", 15, "bold")
+                    )
+                    empty_label.pack(anchor="w", pady=(10, 2), padx=15)
+                    continue
+
+                # Compute stats
+                min_val = series.min()
+                max_val = series.max()
+                mean_val = series.mean()
+                std_val = series.std()
+                median_val = series.median()
+                q1 = series.quantile(0.25)
+                q3 = series.quantile(0.75)
+
+                # Column header
+                col_label = ctk.CTkLabel(
+                    numeric_frame,
+                    text=f"{col}:",
+                    font=("Arial", 15, "bold")
+                )
+                col_label.pack(anchor="w", pady=(10, 2), padx=15)
+
+                # Stats table-like block
+                stats_container = ctk.CTkFrame(numeric_frame, fg_color="#333333")
+                stats_container.pack(fill="x", pady=(0, 10), padx=15)
+
+                def add_stat(label, value):
+                    stat_label = ctk.CTkLabel(
+                        stats_container,
+                        text=f"{label}: {value}",
+                        font=("Arial", 13)
+                    )
+                    stat_label.pack(anchor="w", pady=2, padx=10)
+
+                add_stat("Min", f"{min_val:.4f}")
+                add_stat("Max", f"{max_val:.4f}")
+                add_stat("Mean", f"{mean_val:.4f}")
+                add_stat("Std", f"{std_val:.4f}")
+                add_stat("Median", f"{median_val:.4f}")
+                add_stat("Q1 (25%)", f"{q1:.4f}")
+                add_stat("Q3 (75%)", f"{q3:.4f}")
+
+    def check_charts(self):
+        if not self.charts_loaded and self.tabs.get() == "Charts":
+            self.charts_loaded = True
+            self.update_charts()
+
+        if not self.correlation_loaded and self.tabs.get() == "Correlation":
+            self.correlation_loaded = True
+            self.update_correlation()
+
+        if not self.missing_loaded and self.tabs.get() == "Missing Patterns":
+            self.missing_loaded = True
+            self.update_missing_patterns()
+
+    def update_charts(self, *args):
+        """Generate charts for the selected column."""
+        df = self.app.manager.current_df
+
+        if df is None:
+            return
+
+        col = self.chart_column_var.get()
+
+        if col == "" or col not in df.columns:
+            self.chart_column_var.set(df.columns[0])
+            col = self.chart_column_var.get()
+
+        # --- CLEAN PREVIOUS CHARTS ---
+        for widget in self.chart_frame.winfo_children():
+            widget.destroy()
+
+        self.chart_frame.update_idletasks()
+
+        series = df[col].dropna()
+
+        # --- NUMERIC OR CATEGORICAL ---
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+        is_categorical = pd.api.types.is_string_dtype(series) or pd.api.types.is_object_dtype(series)
+
+        if not (is_numeric or is_categorical):
+            msg = ctk.CTkLabel(
+                self.chart_frame,
+                text="Charts available only for numeric or categorical columns",
+                font=("Arial", 16)
+            )
+            msg.pack(pady=20)
+            return
+
+        def clear_overlay(overlay):
+            overlay.destroy()
+
+        def render():
+            if is_numeric:
+                fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+                fig.patch.set_facecolor("#2b2b2b")
+
+                # Histogram
+                axes[0].hist(series, bins=30, color="#3a7bd5")
+                axes[0].set_title("Histogram", color="white")
+                axes[0].tick_params(colors="white")
+
+                # Boxplot
+                axes[1].boxplot(series, vert=True)
+                axes[1].set_title("Boxplot", color="white")
+                axes[1].tick_params(colors="white")
+
+                # KDE
+                try:
+                    series.plot(kind="density", ax=axes[2], color="#d57b3a")
+                    axes[2].set_title("Density (KDE)", color="white")
+                    axes[2].tick_params(colors="white")
+                except Exception:
+                    axes[2].text(0.5, 0.5, "KDE unavailable", color="white")
+
+            elif is_categorical:
+                counts = series.value_counts()
+                total = counts.sum()
+                pct = counts / total * 100
+                num_categories = len(counts)
+
+                fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+                fig.patch.set_facecolor("#2b2b2b")
+
+                # Bar chart (vertical)
+                axes[0].bar(counts.index, counts.values, color="#3a7bd5")
+                axes[0].set_title("Category Frequencies", color="white")
+                axes[0].tick_params(axis="x", rotation=45, colors="white")
+                axes[0].tick_params(axis="y", colors="white")
+
+                # Add labels on absolute bar chart
+                for rect, val in zip(axes[0].patches, counts.values):
+                    height = rect.get_height()
+                    bar_width = rect.get_width()
+
+                    # Dynamic font size based on number of categories
+                    if num_categories > 30:
+                        break
+                    elif num_categories > 20:
+                        fontsize = 5
+                    elif num_categories > 10:
+                        fontsize = 7
+                    else:
+                        fontsize = 10
+
+                    axes[0].text(
+                        rect.get_x() + bar_width / 2,
+                        height,
+                        f"{val}",
+                        ha="center",
+                        va="bottom",
+                        color="white",
+                        fontsize=fontsize
+                    )
+
+                # Bar chart (horizontal)
+                if len(counts) > 5:
+                    axes[1].bar(pct.index, pct.values, color="#d57b3a")
+                    axes[1].set_title("Category Share (%)", color="white")
+                    axes[1].tick_params(axis="x", rotation=45, colors="white")
+                    axes[1].tick_params(axis="y", colors="white")
+
+                    # Add labels on percentage bar chart
+                    for rect, val in zip(axes[1].patches, pct.values):
+                        height = rect.get_height()
+                        bar_width = rect.get_width()
+
+                        # Dynamic font size based on number of categories
+                        if num_categories > 30:
+                            break
+                        elif num_categories > 20:
+                            fontsize = 5
+                        elif num_categories > 10:
+                            fontsize = 7
+                        else:
+                            fontsize = 10
+
+                        axes[1].text(
+                            rect.get_x() + bar_width / 2,
+                            height,
+                            f"{round(val,1)}%",
+                            ha="center",
+                            va="bottom",
+                            color="white",
+                            fontsize=fontsize
+                        )
+
+                # Pie chart only if few categories
+                else:
+                    axes[1].pie(counts.values, labels=counts.index, autopct="%1.1f%%")
+                    axes[1].set_title("Category Share", color="white")
+
+            for ax in axes:
+                ax.set_facecolor("#1f1f1f")
+
+            fig.tight_layout()
+
+            # Embed directly in chart_frame
+            canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+            canvas_widget = canvas.get_tk_widget()
+            canvas_widget.pack(fill="both", expand=True)
+
+            overlay = ctk.CTkFrame(self.chart_frame, fg_color="transparent")
+            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+            canvas.draw()
+
+            plt.close(fig)
+
+            self.chart_frame.after(100, clear_overlay, overlay)
+
+        # Render after Tk finishes clearing old widgets
+        self.chart_frame.after(1, render)
+
+    def update_correlation(self):
+        if self.prev_corr_selection == self.corr_type_var.get():
+            return
+        else:
+            self.prev_corr_selection = self.corr_type_var.get()
+
+        df = self.app.manager.current_df
+
+        if df is None:
+            return
+
+        # Clear previous content
+        for widget in self.correlation_frame.winfo_children():
+            widget.destroy()
+
+        def show_corr_message(text):
+            msg = ctk.CTkLabel(
+                self.correlation_frame,
+                text=text,
+                font=("Arial", 20, "bold")
+            )
+            msg.pack(pady=40)
+
+        corr_type = self.corr_type_var.get()
+
+        if corr_type == "Full":
+            cols = df.columns
+            corr = pd.DataFrame(np.zeros((len(cols), len(cols))), index=cols, columns=cols)
+
+            for c1 in cols:
+                for c2 in cols:
+                    s1 = df[c1]
+                    s2 = df[c2]
+
+                    if c1 == c2:
+                        corr.loc[c1, c2] = 1
+                        continue
+
+                    is_num1 = pd.api.types.is_numeric_dtype(s1)
+                    is_num2 = pd.api.types.is_numeric_dtype(s2)
+                    is_cat1 = pd.api.types.is_string_dtype(s1) or pd.api.types.is_object_dtype(s1)
+                    is_cat2 = pd.api.types.is_string_dtype(s2) or pd.api.types.is_object_dtype(s2)
+
+                    if is_num1 and is_num2:
+                        corr.loc[c1, c2] = s1.corr(s2)
+
+                    elif is_cat1 and is_cat2:
+                        corr.loc[c1, c2] = cramers_v(s1, s2)
+
+                    elif is_cat1 and is_num2:
+                        corr.loc[c1, c2] = correlation_ratio(s1, s2)
+
+                    elif is_num1 and is_cat2:
+                        corr.loc[c1, c2] = correlation_ratio(s2, s1)
+
+                    else:
+                        corr.loc[c1, c2] = np.nan
+
+        elif corr_type == "Numeric":
+            numeric_df = df.select_dtypes(include="number")
+
+            if numeric_df.shape[1] == 0:
+                show_corr_message("No numeric columns available.")
+                return
+
+            corr = numeric_df.corr()
+
+        elif corr_type == "Categorical":
+            cat_df = df.select_dtypes(include=["object", "string"])
+
+            if cat_df.shape[1] == 0:
+                show_corr_message("No categorical columns available.")
+                return
+
+            cols = cat_df.columns
+            corr = pd.DataFrame(np.zeros((len(cols), len(cols))), index=cols, columns=cols)
+
+            for c1 in cols:
+                for c2 in cols:
+                    corr.loc[c1, c2] = cramers_v(cat_df[c1], cat_df[c2])
+
+        def clear_overlay(overlay):
+            overlay.destroy()
+
+        def render():
+            fig, ax = plt.subplots(figsize=(10, 8))
+            fig.patch.set_facecolor("#2b2b2b")
+
+            # Mask upper triangle
+            mask = np.triu(np.ones_like(corr, dtype=bool))
+
+            cmap = plt.get_cmap("coolwarm")
+
+            heatmap = ax.imshow(
+                corr,
+                cmap=cmap,
+                interpolation="nearest"
+            )
+
+            # Draw mask rectangles
+            for i in range(len(corr)):
+                for j in range(len(corr)):
+                    if mask[i, j]:
+                        ax.add_patch(plt.Rectangle((j - 0.5, i - 0.5), 1, 1, fill=True, color="#2b2b2b"))
+
+            # Axis labels
+            ax.set_xticks(np.arange(len(corr.columns)))
+            ax.set_yticks(np.arange(len(corr.columns)))
+
+            ax.set_xticklabels(corr.columns, rotation=45, ha="right", color="white")
+            ax.set_yticklabels(corr.columns, color="white")
+
+            ax.tick_params(axis="both", which="both", length=0)
+
+            cbar = fig.colorbar(heatmap, ax=ax)
+            cbar.ax.tick_params(colors="white")
+
+            ax.set_anchor("C")
+
+            fig.tight_layout()
+
+            canvas = FigureCanvasTkAgg(fig, master=self.correlation_frame)
+            canvas_widget = canvas.get_tk_widget()
+            canvas_widget.pack(fill="both", expand=True)
+
+            overlay = ctk.CTkFrame(self.correlation_frame, fg_color="transparent")
+            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+            canvas.draw()
+
+            fig.subplots_adjust(bottom=0.20)
+            canvas.draw()
+
+            self.correlation_frame.after(100, clear_overlay, overlay)
+
+            plt.close(fig)
+
+        self.correlation_frame.after(1, render)
+
+    def update_missing_patterns(self):
+        df = self.app.manager.current_df
+
+        if df is None:
+            return
+
+        # Clear previous content
+        for widget in self.missing_frame.winfo_children():
+            widget.destroy()
+
+        # Prepare missing data
+        missing_matrix = df.isna()
+        missing_pct = missing_matrix.mean() * 100
+        missing_corr = missing_matrix.corr()
+
+        if missing_matrix.sum().sum() == 0:
+            msg = ctk.CTkLabel(
+                self.missing_frame,
+                text="No missing data detected in the dataset.",
+                font=("Arial", 20, "bold")
+            )
+            msg.pack(pady=40)
+            self.missing_loaded = False
+            return
+
+        def clear_overlay(overlay):
+            overlay.destroy()
+
+        def render():
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+            fig.patch.set_facecolor("#2b2b2b")
+
+            # --- 1. Missing Matrix ---
+            axes[0].imshow(missing_matrix, aspect="auto", cmap="gray_r")
+            axes[0].set_title("Missing Matrix", color="white")
+            axes[0].set_xticks([])
+            axes[0].set_yticks([])
+            axes[0].set_facecolor("#1f1f1f")
+
+            # --- 2. Missing Bar Chart ---
+            axes[1].bar(missing_pct.index, missing_pct.values, color="#d57b3a")
+            axes[1].set_title("Missing Percentage", color="white")
+            axes[1].tick_params(axis="x", rotation=45, colors="white")
+            axes[1].tick_params(axis="y", colors="white")
+            axes[1].set_facecolor("#1f1f1f")
+
+            # Add labels
+            for rect, val in zip(axes[1].patches, missing_pct.values):
+                axes[1].text(
+                    rect.get_x() + rect.get_width() / 2,
+                    val,
+                    f"{val:.1f}%",
+                    ha="center",
+                    va="bottom",
+                    color="white",
+                    fontsize=8
+                )
+
+            # --- 3. Missing Correlation Heatmap ---
+            cmap = plt.get_cmap("coolwarm")
+            heatmap = axes[2].imshow(missing_corr, cmap=cmap, interpolation="nearest")
+            axes[2].set_title("Missing Correlation", color="white")
+            axes[2].set_facecolor("#1f1f1f")
+
+            axes[2].set_xticks(np.arange(len(missing_corr.columns)))
+            axes[2].set_yticks(np.arange(len(missing_corr.columns)))
+
+            axes[2].set_xticklabels(missing_corr.columns, rotation=45, ha="right", color="white")
+            axes[2].set_yticklabels(missing_corr.columns, color="white")
+
+            axes[2].tick_params(axis="both", which="both", length=0)
+
+            fig.colorbar(heatmap, ax=axes[2]).ax.tick_params(colors="white")
+
+            # Adjust layout
+            plt.subplots_adjust(
+                left=0.05,
+                right=0.95,
+                bottom=0.25,
+                top=0.9,
+                wspace=0.3
+            )
+
+            fig.tight_layout()
+
+            # Embed in Tkinter
+            canvas = FigureCanvasTkAgg(fig, master=self.missing_frame)
+            canvas_widget = canvas.get_tk_widget()
+            canvas_widget.pack(fill="both", expand=True)
+
+            overlay = ctk.CTkFrame(self.missing_frame, fg_color="transparent")
+            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+            canvas.draw()
+
+            fig.subplots_adjust(bottom=0.25)
+            canvas.draw()
+
+            plt.close(fig)
+
+            self.missing_frame.after(100, clear_overlay, overlay)
+
+        self.missing_frame.after(1, render)
 
 

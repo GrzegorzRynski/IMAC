@@ -14,7 +14,7 @@ class ImputationApp(ctk.CTk):
         super().__init__()
 
         self.manager = imputation_manager.ImputationManager()
-        self.after(1, self.manager.load_app_data)
+        self.after(10, self.manager.load_app_data)
 
         self.views = {}
 
@@ -97,7 +97,6 @@ class ImputationApp(ctk.CTk):
             self.views["overview"] = OverviewView(self.main_frame, self) #scroll
 
         self.switch_view("overview")
-
         self.mini_overview_frame.grid_remove()
 
     def show_mini_overview_view(self):

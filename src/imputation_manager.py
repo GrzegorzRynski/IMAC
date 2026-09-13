@@ -15,16 +15,26 @@ class ImputationManager:
 
         self.remembered_locations = []
         self.current_df = None
+        self.original_df = None
         self.current_name = ""
         self.current_path = ""
         self.df_history = []
         self.current_index = 0
 
+        self.on_load_callbacks = []
         self.on_change_callbacks = []
 
         self.data_file = "app_data.json"
         self.data_folder = "data"
         self.data = None
+
+    def register_load_callback(self, callback):
+        if callback not in self.on_load_callbacks:
+            self.on_load_callbacks.append(callback)
+
+    def notify_load(self):
+        for cb in self.on_load_callbacks:
+            cb()
 
     def register_update_callback(self, callback):
         if callback not in self.on_change_callbacks:
@@ -46,7 +56,12 @@ class ImputationManager:
             with open(data_file, "r") as f:
                 data = json.load(f)
         except JSONDecodeError:
-            return
+            CTkMessagebox.CTkMessagebox(
+                title="Error",
+                message="An error has occured while reading app data!",
+                icon="cancel"
+            )
+            data = None
 
         self.data = data
 
@@ -132,6 +147,7 @@ class ImputationManager:
         self.current_name = Path(df_path).name
         self.current_path = df_path
         self.current_df = df
+        self.original_df = df
         self.df_history.clear()
         self.df_history.append(df)
         self.current_index = len(self.df_history)-1
@@ -140,4 +156,5 @@ class ImputationManager:
             self.remembered_locations.append(str(df_path))
 
         self.save_app_data()
+        self.notify_load()
         self.notify_change()
