@@ -3,9 +3,9 @@ from tkinter import ttk
 
 import numpy as np
 import pandas as pd
-from pandas.core.computation import align
 
-from gui.components.correlation_functions import cramers_v, correlation_ratio
+from correlation_functions import cramers_v, correlation_ratio
+from gui.components.history_view import HistoryView
 from init_analitics.init_analytics import report
 
 import matplotlib.pyplot as plt
@@ -53,7 +53,51 @@ class OverviewView(ctk.CTkFrame):
         missing_tab = self.tabs.add("Missing Patterns")
         missing_tab.configure(fg_color="transparent")
 
-        distributions_tab = self.tabs.add("Distributions")
+        self.test_branches = [
+            [
+                {
+                    "id": 1,
+                    "name": "Load Dataset",
+                    "desc": "iris.csv",
+                    "args": {}
+                },
+                {
+                    "id": 2,
+                    "name": "MCAR",
+                    "desc": "20% missingness",
+                    "args": {"pct": 0.2}
+                },
+                {
+                    "id": 3,
+                    "name": "Mean Imputation",
+                    "desc": "All numeric columns",
+                    "args": {"method": "mean"}
+                }
+            ],
+
+            [
+                {
+                    "id": 1,
+                    "name": "Load Dataset",
+                    "desc": "iris.csv",
+                    "args": {}
+                },
+                {
+                    "id": 2,
+                    "name": "MCAR",
+                    "desc": "20% missingness",
+                    "args": {"pct": 0.2}
+                },
+                {
+                    "id": 4,
+                    "name": "KNN Imputation",
+                    "desc": "K = 5",
+                    "args": {"k": 5}
+                }
+            ]
+        ]
+
+        self.history = HistoryView(self, self.app.manager.df_history)
 
         # --- SEARCH BAR ---
         search_frame = ctk.CTkFrame(tables_tab, fg_color="transparent")
@@ -451,7 +495,14 @@ class OverviewView(ctk.CTkFrame):
 
         self.update_correlation()
 
-        self.update_missing_patterns()
+        self.update_missing_patterns(df_report)
+
+        self.history.pack(fill="both", expand=True)
+
+        self.app.manager.df_history.branches = self.test_branches
+        self.app.manager.df_history.branch_names = ["Main", "KNN Comparison"]
+
+        self.history.render_history()
 
     def update_tables(self, df, df_report):
         missing_df = df_report["missing"]
@@ -1077,7 +1128,7 @@ class OverviewView(ctk.CTkFrame):
 
         self.correlation_frame.after(1, render)
 
-    def update_missing_patterns(self):
+    def update_missing_patterns(self, df_report):
         df = self.app.manager.current_df
 
         if df is None:
@@ -1087,12 +1138,12 @@ class OverviewView(ctk.CTkFrame):
         for widget in self.missing_frame.winfo_children():
             widget.destroy()
 
-        # Prepare missing data
+        missing_df = df_report["missing"]
         missing_matrix = df.isna()
-        missing_pct = missing_matrix.mean() * 100
+        missing_pct = missing_df["missing_pct"]
         missing_corr = missing_matrix.corr()
 
-        if missing_matrix.sum().sum() == 0:
+        if missing_df["missing_count"].sum() == 0:
             msg = ctk.CTkLabel(
                 self.missing_frame,
                 text="No missing data detected in the dataset.",

@@ -4,6 +4,7 @@ import CTkMessagebox
 import customtkinter as ctk
 
 import imputation_manager
+from gui.components.history_view import HistoryView
 from gui.frames.load_data_frame import LoadDataView
 from gui.frames.mini_overview_frame import MiniOverviewView
 from gui.frames.overview_frame import OverviewView
@@ -87,14 +88,14 @@ class ImputationApp(ctk.CTk):
 
     def show_overview_view(self):
         if "overview" not in self.views.keys():
-            # scroll = ctk.CTkScrollableFrame(self.main_frame)
-            # scroll.grid(row=0, column=0, sticky="nswe")
-            #
-            # view = OverviewView(scroll, self)
-            # view.configure(fg_color="transparent")
-            # view.pack(fill="both", expand=True)
+            scroll = ctk.CTkScrollableFrame(self.main_frame)
+            scroll.grid(row=0, column=0, sticky="nswe")
 
-            self.views["overview"] = OverviewView(self.main_frame, self) #scroll
+            view = OverviewView(scroll, self)
+            view.configure(fg_color="transparent")
+            view.pack(fill="both", expand=True)
+
+            self.views["overview"] = scroll
 
         self.switch_view("overview")
         self.mini_overview_frame.grid_remove()

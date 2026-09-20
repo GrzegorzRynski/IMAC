@@ -7,6 +7,7 @@ import CTkMessagebox
 import pandas as pd
 import json
 
+from history_manager import HistoryManager
 from load_data import load_data_file
 
 
@@ -18,7 +19,7 @@ class ImputationManager:
         self.original_df = None
         self.current_name = ""
         self.current_path = ""
-        self.df_history = []
+        self.df_history = HistoryManager()
         self.current_index = 0
 
         self.on_load_callbacks = []
@@ -148,9 +149,9 @@ class ImputationManager:
         self.current_path = df_path
         self.current_df = df
         self.original_df = df
-        self.df_history.clear()
-        self.df_history.append(df)
-        self.current_index = len(self.df_history)-1
+        # self.df_history.clear()
+        # self.df_history.append(df)
+        # self.current_index = len(self.df_history)-1
 
         if str(df_path) not in self.remembered_locations:
             self.remembered_locations.append(str(df_path))
