@@ -4,40 +4,96 @@ import customtkinter as ctk
 
 class HistoryView(ctk.CTkFrame):
 
-    ROW_HEIGHT = 170
-    MAX_VISIBLE_BRANCHES = 3
+    ROW_HEIGHT = 200
     BRANCH_SPACING = 5
+    MAX_VISIBLE_BRANCHES = 3
+    LEFT_COLUMN_WIDTH = 150
+    TITLE_HEIGHT = 40
+    ADD_BUTTON_HEIGHT = 70
 
-    def __init__(self, parent, history: history_manager.HistoryManager):
+    BRANCH_PITCH = ROW_HEIGHT + 2 * BRANCH_SPACING
+
+    # Branch colors
+    ACTIVE_BRANCH_COLOR = "#1F6AA5"
+    INACTIVE_BRANCH_COLOR = "#263542"
+
+    # Action colors
+    COMPLETED_ACTION_COLOR = "#245D87"
+    CURRENT_ACTION_COLOR = "#2F8FD8"
+    FUTURE_ACTION_COLOR = "#30363B"
+
+    # Hover colors
+    COMPLETED_ACTION_HOVER = "#2D719F"
+    CURRENT_ACTION_HOVER = "#3B9BE5"
+    FUTURE_ACTION_HOVER = "#3A4147"
+
+    INACTIVE_ACTION_HOVER = "#304252"
+
+    # Current action border
+    CURRENT_ACTION_BORDER_COLOR = "#70C1FF"
+    CURRENT_ACTION_BORDER_WIDTH = 3
+
+    DEFAULT_ACTION_BORDER_WIDTH = 0
+
+    # Branch control buttons
+    BRANCH_BUTTON_COLOR = "#3A4A56"
+    BRANCH_BUTTON_HOVER = "#4A5D6A"
+
+    BRANCH_MOVE_COLOR = "#344550"
+    BRANCH_MOVE_HOVER = "#465B68"
+
+    BRANCH_DELETE_COLOR = "#B83A3A"
+    BRANCH_DELETE_HOVER = "#D14A4A"
+
+    BRANCH_CONFIRM_COLOR = "#2E8B57"
+    BRANCH_CONFIRM_HOVER = "#3AAE6F"
+
+    BRANCH_CANCEL_COLOR = "#8F3434"
+    BRANCH_CANCEL_HOVER = "#B64242"
+
+    def __init__(self, parent, history: history_manager.HistoryManager, scroll = None):
         super().__init__(parent)
+
+        self.configure(fg_color="transparent")
+
+        self.scroll_parent = scroll
 
         self.history = history
         self.pack_propagate(False)
 
-        title = ctk.CTkLabel(
+        self.title_frame = ctk.CTkFrame(
             self,
+            height=self.TITLE_HEIGHT,
+            fg_color="transparent"
+        )
+
+        self.title_frame.pack(
+            fill="x"
+        )
+
+        self.title_frame.pack_propagate(False)
+
+        title = ctk.CTkLabel(
+            self.title_frame,
             text="History",
             font=("Arial", 18, "bold")
         )
-        title.pack(anchor="n", padx=10, pady=(5, 10))
 
-        self.main_frame = ctk.CTkScrollableFrame(self)
-        self.main_frame.pack(fill="both", expand=True)
-
-        self.left_column = ctk.CTkFrame(
-            self.main_frame,
-            width=150
+        title.pack(
+            expand=True
         )
-        self.left_column.pack(side="left", fill="y")
 
-        self.right_column = ctk.CTkFrame(
-            self.main_frame
+        self.main_frame = ctk.CTkScrollableFrame(
+            self,
+            height=self.MAX_VISIBLE_BRANCHES * self.BRANCH_PITCH
         )
-        self.right_column.pack(
-            side="left",
+
+        self.main_frame.pack(
             fill="both",
             expand=True
         )
+
+        self.history.register_view_update_callback(self.render_history)
 
     def rename_branch(self, branch_rename_field, branch_rename_cancel_button,
                       branch_rename_confirm_button,branch_id, branch_name):
@@ -145,6 +201,19 @@ class HistoryView(ctk.CTkFrame):
         self.history.create_branch_from(branch_id)
         self.render_history()
 
+        self.scroll_parent._parent_canvas.yview_moveto(1.0)
+
+    def select_action(self, branch_id, action_id):
+        if self.history.select_action(branch_id, action_id):
+            self.render_history()
+        
+    def create_branch(self):
+        self.history.create_new_branch()
+        self.render_history()
+
+        self.main_frame._parent_canvas.yview_moveto(1.0)
+        self.scroll_parent._parent_canvas.yview_moveto(1.0)
+
     def render_history(self):
 
         branches = self.history.branches
@@ -155,14 +224,13 @@ class HistoryView(ctk.CTkFrame):
             self.MAX_VISIBLE_BRANCHES
         )
 
-        height = visible * (self.ROW_HEIGHT + 4 * self.BRANCH_SPACING) + 69
+        content_height = visible * self.BRANCH_PITCH + self.ADD_BUTTON_HEIGHT
+        height = self.TITLE_HEIGHT + content_height
 
         self.configure(height=height)
+        self.main_frame.configure(height=content_height)
 
-        for widget in self.left_column.winfo_children():
-            widget.destroy()
-
-        for widget in self.right_column.winfo_children():
+        for widget in self.main_frame.winfo_children():
             widget.destroy()
 
         def format_args(args):
@@ -181,39 +249,66 @@ class HistoryView(ctk.CTkFrame):
             except IndexError:
                 branch_name = "Branch " + str(branch_id)
 
-            branch_label_frame = ctk.CTkFrame(
-                self.left_column,
-                height = self.ROW_HEIGHT + self.BRANCH_SPACING*4,
-                width = 150,
-                fg_color="#131313",
+            branch_row = ctk.CTkFrame(
+                self.main_frame,
+                height=self.ROW_HEIGHT,
             )
 
-            branch_label_frame.pack(side="top", fill="x", padx=5, pady=self.BRANCH_SPACING)
+            branch_row.pack(
+                fill="x",
+                padx=5,
+                pady=self.BRANCH_SPACING
+            )
+
+            branch_row.pack_propagate(False)
+
+            is_active_branch = branch_id == self.history.current_branch
+
+            branch_color = (
+                self.ACTIVE_BRANCH_COLOR
+                if is_active_branch
+                else self.INACTIVE_BRANCH_COLOR
+            )
+
+            branch_label_frame = ctk.CTkFrame(
+                branch_row,
+                width=self.LEFT_COLUMN_WIDTH,
+                height=self.ROW_HEIGHT,
+                fg_color=branch_color
+            )
+
+            branch_label_frame.pack(
+                side="left",
+                fill="y"
+            )
+
+            branch_label_frame.pack_propagate(False)
 
             branch_label_frame.grid_rowconfigure(0, weight=0, pad=5)
             branch_label_frame.grid_rowconfigure(1, weight=1)
             branch_label_frame.grid_rowconfigure(2, weight=0)
             branch_label_frame.grid_rowconfigure(3, weight=0)
             branch_label_frame.grid_rowconfigure(4, weight=0)
-            branch_label_frame.grid_rowconfigure(5, weight=1)
 
             branch_label_frame.grid_columnconfigure(0, weight=1)
             branch_label_frame.grid_columnconfigure(1, weight=1)
             branch_label_frame.grid_columnconfigure(2, weight=1)
             branch_label_frame.grid_columnconfigure(3, weight=1)
 
-            branch_label_frame.grid_propagate(False)
-
             branch_label = ctk.CTkLabel(
                 branch_label_frame,
-                height = self.ROW_HEIGHT + self.BRANCH_SPACING*4,
                 text=branch_name,
-                wraplength=150,
+                wraplength=self.LEFT_COLUMN_WIDTH - 10,
                 font=("Arial", 16, "bold"),
                 padx=5
             )
 
-            branch_label.grid(row=1, column=0, columnspan=4)
+            branch_label.grid(
+                row=1,
+                column=0,
+                columnspan=4,
+                sticky="nsew"
+            )
 
             branch_rename_field = ctk.CTkEntry(
                 branch_label_frame,
@@ -225,7 +320,8 @@ class HistoryView(ctk.CTkFrame):
                 height=20,
                 width=30,
                 text="X",
-                fg_color="red"
+                fg_color=self.BRANCH_CANCEL_COLOR,
+                hover_color=self.BRANCH_CANCEL_HOVER
             )
 
             confirm_button = ctk.CTkButton(
@@ -233,14 +329,15 @@ class HistoryView(ctk.CTkFrame):
                 height=20,
                 width=30,
                 text="✔",
-                fg_color="green"
+                fg_color=self.BRANCH_CONFIRM_COLOR,
+                hover_color=self.BRANCH_CONFIRM_HOVER
             )
 
             delete_branch_label = ctk.CTkLabel(
                 branch_label_frame,
                 font=("Arial", 12, "bold"),
                 text="Confirm delete?",
-                text_color="red"
+                text_color="#FF6B6B"
             )
 
             branch_rename_button = ctk.CTkButton(
@@ -249,6 +346,8 @@ class HistoryView(ctk.CTkFrame):
                 height=20,
                 text="rename",
                 font=("Arial", 10),
+                fg_color=self.BRANCH_BUTTON_COLOR,
+                hover_color=self.BRANCH_BUTTON_HOVER,
                 command=lambda
                     field=branch_rename_field,
                     can_button=cancel_button,
@@ -267,6 +366,8 @@ class HistoryView(ctk.CTkFrame):
                 height=20,
                 text="copy",
                 font=("Arial", 10),
+                fg_color=self.BRANCH_BUTTON_COLOR,
+                hover_color=self.BRANCH_BUTTON_HOVER,
                 command=lambda
                     br_id=branch_id:
                     self.copy_branch(
@@ -281,6 +382,8 @@ class HistoryView(ctk.CTkFrame):
                 width=20,
                 height=20,
                 text="↑",
+                fg_color=self.BRANCH_MOVE_COLOR,
+                hover_color=self.BRANCH_MOVE_HOVER,
                 command=lambda
                     br_id=branch_id:
                     self.move_branch(
@@ -296,6 +399,8 @@ class HistoryView(ctk.CTkFrame):
                 width=20,
                 height=20,
                 text="↓",
+                fg_color=self.BRANCH_MOVE_COLOR,
+                hover_color=self.BRANCH_MOVE_HOVER,
                 command=lambda
                     br_id=branch_id:
                 self.move_branch(
@@ -311,7 +416,8 @@ class HistoryView(ctk.CTkFrame):
                 height=20,
                 width=20,
                 text="X",
-                fg_color="red",
+                fg_color=self.BRANCH_DELETE_COLOR,
+                hover_color=self.BRANCH_DELETE_HOVER,
                 command = lambda
                     field=branch_rename_field,
                     label=delete_branch_label,
@@ -324,25 +430,91 @@ class HistoryView(ctk.CTkFrame):
             delete_branch_button.grid(row=0, column=3)
 
             row_frame = ctk.CTkScrollableFrame(
-                self.right_column,
+                branch_row,
                 orientation="horizontal",
                 height=self.ROW_HEIGHT
             )
-            row_frame.pack(side="top", fill="x", padx=5, pady=self.BRANCH_SPACING)
 
-            for entry in branch:
+            row_frame.pack(
+                side="left",
+                fill="both",
+                expand=True
+            )
+
+            for action_index, entry in enumerate(branch):
+
+                is_active_branch = branch_id == self.history.current_branch
+                is_current_action = (
+                        is_active_branch
+                        and action_index == self.history.current_action_index
+                )
+
+                if not is_active_branch:
+                    # Entire inactive branch is muted
+                    card_color = self.INACTIVE_BRANCH_COLOR
+                    hover_color = self.INACTIVE_ACTION_HOVER
+                    border_width = self.DEFAULT_ACTION_BORDER_WIDTH
+                    border_color = self.INACTIVE_BRANCH_COLOR
+
+                elif action_index < self.history.current_action_index:
+                    # Operation has already been applied
+                    card_color = self.COMPLETED_ACTION_COLOR
+                    hover_color = self.COMPLETED_ACTION_HOVER
+                    border_width = self.DEFAULT_ACTION_BORDER_WIDTH
+                    border_color = self.COMPLETED_ACTION_COLOR
+
+                elif is_current_action:
+                    # Current dataset state
+                    card_color = self.CURRENT_ACTION_COLOR
+                    hover_color = self.CURRENT_ACTION_HOVER
+                    border_width = self.CURRENT_ACTION_BORDER_WIDTH
+                    border_color = self.CURRENT_ACTION_BORDER_COLOR
+
+                else:
+                    # Operation exists in history, but is after current state
+                    card_color = self.FUTURE_ACTION_COLOR
+                    hover_color = self.FUTURE_ACTION_HOVER
+                    border_width = self.DEFAULT_ACTION_BORDER_WIDTH
+                    border_color = self.FUTURE_ACTION_COLOR
+
                 card = ctk.CTkButton(
                     row_frame,
                     width=240,
                     height=self.ROW_HEIGHT,
+
+                    fg_color=card_color,
+                    hover_color=hover_color,
+
+                    border_width=border_width,
+                    border_color=border_color,
+
                     text=(
                         f"{entry['name']}\n\n"
                         f"{entry['desc']}\n\n"
                         f"{format_args(entry['args'])}"
-                    )
+                    ),
+
+                    command = lambda
+                        act_id=action_index,
+                        br_id=branch_id:
+                    self.select_action(br_id, act_id)
                 )
 
                 card.pack(
                     side="left",
-                    padx=5
+                    padx=5,
                 )
+
+        add_branch_button = ctk.CTkButton(
+            self.main_frame,
+            text="+",
+            width=50,
+            height=50,
+            font=("Arial", 30, "bold"),
+            command=self.create_branch,
+            fg_color=self.BRANCH_MOVE_COLOR
+        )
+
+        add_branch_button.pack(
+            pady=10
+        )

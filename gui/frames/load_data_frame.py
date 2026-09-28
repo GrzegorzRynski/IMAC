@@ -17,6 +17,8 @@ class LoadDataView(ctk.CTkFrame):
 
         self.app = app
 
+        self.up_to_date = False
+
         # --- TITLE ---
         title = ctk.CTkLabel(self, text="Load Dataset", font=("Arial", 22, "bold"))
         title.pack(pady=20)
@@ -68,7 +70,7 @@ class LoadDataView(ctk.CTkFrame):
         refresh_btn = ctk.CTkButton(btn_frame, text="Refresh", command=self.refresh_known)
         refresh_btn.pack(side="left", padx=(5,10))
 
-        self.app.manager.register_load_callback(self.show_current_info)
+        self.app.manager.register_update_callback(self.on_update)
 
         self.update_known_list()
         self.show_current_info()
@@ -211,3 +213,12 @@ class LoadDataView(ctk.CTkFrame):
             filename = os.path.basename(path)
             display_text = f"{filename} – {path}"
             self.known_list.insert("end", display_text)
+
+    def update_view(self):
+        if self.app.current_view == self and not self.up_to_date:
+            self.show_current_info()
+            self.up_to_date = True
+
+    def on_update(self):
+        self.up_to_date = False
+        self.update_view()

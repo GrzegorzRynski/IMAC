@@ -18,9 +18,11 @@ class ImputationApp(ctk.CTk):
         self.after(10, self.manager.load_app_data)
 
         self.views = {}
+        self.view_change = {}
 
         self.mini_overview = None
         self.current_view = None
+        self.current_view_name = None
 
         # --- WINDOW CONFIG ---
         self.title("Imputation Methods Analysis Center")
@@ -85,17 +87,14 @@ class ImputationApp(ctk.CTk):
 
         self.current_view = self.views[name]
         self.current_view.grid(row=0, column=0, sticky="nswe")
+        self.current_view.update_view()
+
+    def register_view_change(self, name, callback):
+        self.view_change.append(callback)
 
     def show_overview_view(self):
         if "overview" not in self.views.keys():
-            scroll = ctk.CTkScrollableFrame(self.main_frame)
-            scroll.grid(row=0, column=0, sticky="nswe")
-
-            view = OverviewView(scroll, self)
-            view.configure(fg_color="transparent")
-            view.pack(fill="both", expand=True)
-
-            self.views["overview"] = scroll
+            self.views["overview"] = OverviewView(self.main_frame, self)
 
         self.switch_view("overview")
         self.mini_overview_frame.grid_remove()

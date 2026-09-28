@@ -12,17 +12,30 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
-class OverviewView(ctk.CTkFrame):
+class OverviewView(ctk.CTkScrollableFrame):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
 
+        #TMP
+        self.first = True
+
         self.page_size = 1000
         self.current_page = 0
         self.filtered_df = None
-        self.charts_loaded = False
-        self.correlation_loaded = False
-        self.missing_loaded = False
+
+        self.up_to_date = {
+            "main" : False,
+            "tables" : False,
+            "moreinfo" : False,
+            "charts" : False,
+            "correlation" : False,
+            "missing" : False,
+            "history" : False
+        }
+
+        self.df = None
+        self.report = None
 
         # --- TITLE ---
         title = ctk.CTkLabel(self, text="Dataset Overview", font=("Arial", 24, "bold"))
@@ -36,7 +49,7 @@ class OverviewView(ctk.CTkFrame):
         self.info_label = ctk.CTkLabel(self, text="", font=("Arial", 16))
         self.info_label.pack(pady=10)
 
-        self.tabs = ctk.CTkTabview(self, fg_color="transparent", command=self.check_charts)
+        self.tabs = ctk.CTkTabview(self, fg_color="transparent", command=self.update_view)
         self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
 
         tables_tab = self.tabs.add("Tables")
@@ -97,7 +110,7 @@ class OverviewView(ctk.CTkFrame):
             ]
         ]
 
-        self.history = HistoryView(self, self.app.manager.df_history)
+        self.history = HistoryView(self, self.app.manager.df_history, self)
 
         # --- SEARCH BAR ---
         search_frame = ctk.CTkFrame(tables_tab, fg_color="transparent")
@@ -244,12 +257,11 @@ class OverviewView(ctk.CTkFrame):
         reset_btn.pack(pady=10)
 
         # Register auto-update
-        self.app.manager.register_update_callback(self.update_view)
-        self.app.manager.register_load_callback(self.load_update)
+        self.app.manager.register_update_callback(self.on_update)
 
         # ---------------------- MORE INFO ---------------------------------------------------------
 
-        self.moreinfo_frame = ctk.CTkScrollableFrame(moreinfo_tab, fg_color="transparent")
+        self.moreinfo_frame = ctk.CTkScrollableFrame(moreinfo_tab, fg_color="transparent", height=500)
         self.moreinfo_frame.pack(fill="both", expand=True, padx=50, pady=50)
 
         # ---------------------- CHARTS TAB ---------------------------------------------------------
@@ -452,57 +464,80 @@ class OverviewView(ctk.CTkFrame):
         self.current_page = 0
         self.load_page()
 
-    def load_update(self):
-        self.charts_loaded = False
-        self.correlation_loaded = False
-        self.missing_loaded = False
-        self.check_charts()
+    def on_update(self):
+        for key, value in self.up_to_date.items():
+            self.up_to_date[key] = False
+        self.update_view()
 
     def update_view(self):
-        df = self.app.manager.current_df
 
-        if df is None:
-            self.info_label.pack_forget()
-            self.tabs.pack_forget()
-            self.name_label.configure(text="No Dataset Loaded")
-            self.table["columns"] = []
-            self.stats_table["columns"] = []
-            return
+        if self.app.current_view == self:
+            if not self.up_to_date["main"]:
+                self.df = self.app.manager.current_df
 
-        # --- NAME ---
-        self.name_label.configure(text=f"Dataset: {self.app.manager.current_name}")
+                if self.df is None:
+                    self.info_label.pack_forget()
+                    self.tabs.pack_forget()
+                    self.name_label.configure(text="No Dataset Loaded")
+                    self.table["columns"] = []
+                    self.stats_table["columns"] = []
+                    return
 
-        # --- REPORT ---
-        df_report = report(df)
+                # --- NAME ---
+                self.name_label.configure(text=f"Dataset: {self.app.manager.current_name}")
 
-        # --- INFO BAR ---
-        missing_percent = df.isna().sum().sum() / df.size * 100
-        self.info_label.pack(pady=10)
-        self.info_label.configure(
-            text=f"Rows: {len(df)} | Columns: {len(df.columns)} | "
-                 f"Missing: {missing_percent:.2f}%"
-        )
+                # --- REPORT ---
+                self.report = report(self.df)
 
-        # --- TABS ---
-        self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
+                # --- INFO BAR ---
+                missing_percent = self.df.isna().sum().sum() / self.df.size * 100
+                self.info_label.pack(pady=10)
+                self.info_label.configure(
+                    text=f"Rows: {len(self.df)} | Columns: {len(self.df.columns)} | "
+                         f"Missing: {missing_percent:.2f}%"
+                )
 
-        self.update_tables(df, df_report)
+                self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
+                self.up_to_date["main"] = True
 
-        self.update_more_info(df_report)
+            # --- TABS ---
+            if self.tabs.get() == "Tables":
+                if not self.up_to_date["tables"]:
+                    self.update_tables(self.df, self.report)
+                    self.up_to_date["tables"] = True
 
-        self.chart_selector.configure(values=list(df.columns))
-        self.update_charts()
+            if self.tabs.get() == "More Info":
+                if not self.up_to_date["moreinfo"]:
+                    self.update_more_info(self.report)
+                    self.up_to_date["moreinfo"] = True
 
-        self.update_correlation()
+            if self.tabs.get() == "Charts":
+                if not self.up_to_date["charts"]:
+                    self.chart_selector.configure(values=list(self.df.columns))
+                    self.update_charts()
+                    self.up_to_date["charts"] = True
 
-        self.update_missing_patterns(df_report)
+            if self.tabs.get() == "Correlation":
+                if not self.up_to_date["correlation"]:
+                    self.update_correlation()
+                    self.up_to_date["correlation"] = True
 
-        self.history.pack(fill="both", expand=True)
+            if self.tabs.get() == "Missing Patterns":
+                if not self.up_to_date["missing"]:
+                    self.update_missing_patterns(self.report)
+                    self.up_to_date["missing"] = True
 
-        self.app.manager.df_history.branches = self.test_branches
-        self.app.manager.df_history.branch_names = ["Main", "KNN Comparison"]
+            # TEMPORARY
+            if self.first:
+                self.app.manager.df_history.branches = self.test_branches
+                self.app.manager.df_history.branch_names = ["Main", "KNN Comparison"]
+            self.first = False
 
-        self.history.render_history()
+            # --- HISTORY ---
+            if not self.up_to_date["history"]:
+                self.history.pack(fill="both", expand=True)
+                self.history.render_history()
+                self.up_to_date["history"] = True
 
     def update_tables(self, df, df_report):
         missing_df = df_report["missing"]
@@ -816,19 +851,6 @@ class OverviewView(ctk.CTkFrame):
                 add_stat("Median", f"{median_val:.4f}")
                 add_stat("Q1 (25%)", f"{q1:.4f}")
                 add_stat("Q3 (75%)", f"{q3:.4f}")
-
-    def check_charts(self):
-        if not self.charts_loaded and self.tabs.get() == "Charts":
-            self.charts_loaded = True
-            self.update_charts()
-
-        if not self.correlation_loaded and self.tabs.get() == "Correlation":
-            self.correlation_loaded = True
-            self.update_correlation()
-
-        if not self.missing_loaded and self.tabs.get() == "Missing Patterns":
-            self.missing_loaded = True
-            self.update_missing_patterns()
 
     def update_charts(self, *args):
         """Generate charts for the selected column."""
