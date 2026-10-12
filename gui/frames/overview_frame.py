@@ -3,6 +3,7 @@ from tkinter import ttk
 
 import numpy as np
 import pandas as pd
+from matplotlib.colors import ListedColormap
 
 from correlation_functions import cramers_v, correlation_ratio
 from gui.components.history_view import HistoryView
@@ -16,9 +17,6 @@ class OverviewView(ctk.CTkScrollableFrame):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
-
-        #TMP
-        self.first = True
 
         self.page_size = 1000
         self.current_page = 0
@@ -66,50 +64,6 @@ class OverviewView(ctk.CTkScrollableFrame):
         missing_tab = self.tabs.add("Missing Patterns")
         missing_tab.configure(fg_color="transparent")
 
-        self.test_branches = [
-            [
-                {
-                    "id": 1,
-                    "name": "Load Dataset",
-                    "desc": "iris.csv",
-                    "args": {}
-                },
-                {
-                    "id": 2,
-                    "name": "MCAR",
-                    "desc": "20% missingness",
-                    "args": {"pct": 0.2}
-                },
-                {
-                    "id": 3,
-                    "name": "Mean Imputation",
-                    "desc": "All numeric columns",
-                    "args": {"method": "mean"}
-                }
-            ],
-
-            [
-                {
-                    "id": 1,
-                    "name": "Load Dataset",
-                    "desc": "iris.csv",
-                    "args": {}
-                },
-                {
-                    "id": 2,
-                    "name": "MCAR",
-                    "desc": "20% missingness",
-                    "args": {"pct": 0.2}
-                },
-                {
-                    "id": 4,
-                    "name": "KNN Imputation",
-                    "desc": "K = 5",
-                    "args": {"k": 5}
-                }
-            ]
-        ]
-
         self.history = HistoryView(self, self.app.manager.df_history, self)
 
         # --- SEARCH BAR ---
@@ -134,14 +88,14 @@ class OverviewView(ctk.CTkScrollableFrame):
         split_frame.grid_rowconfigure(0, weight=1)
 
         # --- TABLE AREA ---
-        table_container = ctk.CTkFrame(split_frame)
-        table_container.grid(row=0, column=0, sticky="nswe", padx=10)
+        self.table_container = ctk.CTkFrame(split_frame)
+        self.table_container.grid(row=0, column=0, sticky="nswe", padx=10)
 
         # Scrollbars
-        self.table_scroll_y = ctk.CTkScrollbar(table_container, orientation="vertical")
+        self.table_scroll_y = ctk.CTkScrollbar(self.table_container, orientation="vertical")
         self.table_scroll_y.pack(side="right", fill="y")
 
-        self.table_scroll_x = ctk.CTkScrollbar(table_container, orientation="horizontal")
+        self.table_scroll_x = ctk.CTkScrollbar(self.table_container, orientation="horizontal")
         self.table_scroll_x.pack(side="bottom", fill="x")
 
         # Treeview
@@ -172,7 +126,7 @@ class OverviewView(ctk.CTkScrollableFrame):
         )
 
         self.table = ttk.Treeview(
-            table_container,
+            self.table_container,
             show="headings",
             yscrollcommand=self.table_scroll_y.set,
             xscrollcommand=self.table_scroll_x.set
@@ -184,7 +138,7 @@ class OverviewView(ctk.CTkScrollableFrame):
         self.table_scroll_y.configure(command=self.table.yview)
         self.table_scroll_x.configure(command=self.table.xview)
 
-        pagination_frame = ctk.CTkFrame(table_container, fg_color="transparent")
+        pagination_frame = ctk.CTkFrame(self.table_container, fg_color="transparent")
         pagination_frame.pack(fill="x", pady=10)
 
         pagination_frame.grid_columnconfigure(0, weight=1)
@@ -243,18 +197,64 @@ class OverviewView(ctk.CTkScrollableFrame):
             yscrollcommand=self.stats_scroll_y.set,
             height=20
         )
-        self.stats_table.pack(fill="both", expand=True)
+        self.stats_table.pack(fill="both", expand=False)
 
         self.stats_scroll_y.configure(command=self.stats_table.yview)
 
+        buttons_frame = ctk.CTkFrame(tables_tab, fg_color="transparent")
+        buttons_frame.pack(fill="x", pady=10)
+
+        center_frame = ctk.CTkFrame(buttons_frame, fg_color="transparent")
+        center_frame.pack(anchor="center")
+
+        mark_as_missing_btn = ctk.CTkButton(
+            center_frame,
+            text="Mark unusual as missing",
+            command=lambda
+                unusual_tokens = [
+                    "",
+                    " ",
+                    "NA",
+                    "N/A",
+                    "NULL",
+                    "null",
+                    "?",
+                    "-"
+                ]:
+            self.app.manager.mark_unusual_as_missing(self.report, unusual_tokens),
+            fg_color="#3a7bd5",
+            hover_color="#2f5fa8"
+        )
+        mark_as_missing_btn.pack(side="left", padx=5)
+
+        delete_rows_btn = ctk.CTkButton(
+            center_frame,
+            text="Delete rows with unusual",
+            command=lambda
+                unusual_tokens=[
+                    "",
+                    " ",
+                    "NA",
+                    "N/A",
+                    "NULL",
+                    "null",
+                    "?",
+                    "-"
+                ]:
+            self.app.manager.delete_unusual_rows(self.report, unusual_tokens),
+            fg_color="#3a7bd5",
+            hover_color="#2f5fa8"
+        )
+        delete_rows_btn.pack(side="left", padx=5)
+
         reset_btn = ctk.CTkButton(
-            tables_tab,
+            center_frame,
             text="Reset Tables",
             command=self.reset_tables,
             fg_color="#3a7bd5",
             hover_color="#2f5fa8"
         )
-        reset_btn.pack(pady=10)
+        reset_btn.pack(side="left", padx=5)
 
         # Register auto-update
         self.app.manager.register_update_callback(self.on_update)
@@ -421,9 +421,8 @@ class OverviewView(ctk.CTkScrollableFrame):
             self.stats_table.delete(row)
 
         # Reinsert original stats
-        df_report = report(df)
-        missing_df = df_report["missing"]
-        types_dict = df_report["types"]
+        missing_df = self.report["missing"]
+        types_dict = self.report["types"]
 
         for col in df.columns:
             dtype = (
@@ -527,12 +526,6 @@ class OverviewView(ctk.CTkScrollableFrame):
                     self.update_missing_patterns(self.report)
                     self.up_to_date["missing"] = True
 
-            # TEMPORARY
-            if self.first:
-                self.app.manager.df_history.branches = self.test_branches
-                self.app.manager.df_history.branch_names = ["Main", "KNN Comparison"]
-            self.first = False
-
             # --- HISTORY ---
             if not self.up_to_date["history"]:
                 self.history.pack(fill="both", expand=True)
@@ -542,6 +535,9 @@ class OverviewView(ctk.CTkScrollableFrame):
     def update_tables(self, df, df_report):
         missing_df = df_report["missing"]
         types_dict = df_report["types"]
+
+        self.table_container.grid_forget()
+        self.stats_frame.grid_forget()
 
         # Clear tables
         for row in self.table.get_children():
@@ -572,6 +568,18 @@ class OverviewView(ctk.CTkScrollableFrame):
             self.table.heading(col, text=col, command=lambda c=col: self.sort_treeview(self.table, c, False))
 
         # --- STATS TABLE ---
+        self.stats_table["columns"] = ("Column", "Type", "Missing", "Missing %", "Unusual")
+
+        self.stats_table.column("Column", width=100, anchor="w", stretch=False)
+        self.stats_table.column("Type", width=60, anchor="w", stretch=False)
+        self.stats_table.column("Missing", width=60, anchor="center", stretch=False)
+        self.stats_table.column("Missing %", width=80, anchor="center", stretch=False)
+        self.stats_table.column("Unusual", width=80, anchor="center", stretch=False)
+
+        for col in ("Column", "Type", "Missing", "Missing %", "Unusual"):
+            self.stats_table.heading(col, text=col,
+                                     command=lambda c=col: self.sort_treeview(self.stats_table, c, False))
+
         for col in df.columns:
             dtype = (
                 "Num" if col in types_dict["numeric"] else
@@ -585,17 +593,8 @@ class OverviewView(ctk.CTkScrollableFrame):
 
             self.stats_table.insert("", "end", values=(col, dtype, miss, miss_pct, unusual))
 
-        self.stats_table["columns"] = ("Column", "Type", "Missing", "Missing %", "Unusual")
-
-        self.stats_table.column("Column", width=100, anchor="w")
-        self.stats_table.column("Type", width=60, anchor="w")
-        self.stats_table.column("Missing", width=60, anchor="center")
-        self.stats_table.column("Missing %", width=80, anchor="center")
-        self.stats_table.column("Unusual", width=80, anchor="center")
-
-        for col in ("Column", "Type", "Missing", "Missing %", "Unusual"):
-            self.stats_table.heading(col, text=col,
-                                     command=lambda c=col: self.sort_treeview(self.stats_table, c, False))
+        self.table_container.grid(row=0, column=0, sticky="nswe", padx=10)
+        self.stats_frame.grid(row=0, column=1, sticky="nswe", padx=10)
 
         self.current_page = 0
         self.filtered_df = None
@@ -1179,11 +1178,21 @@ class OverviewView(ctk.CTkScrollableFrame):
             overlay.destroy()
 
         def render():
-            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+            fig, axes = plt.subplots(
+                3,
+                1,
+                figsize=(12, 14),
+                gridspec_kw={"height_ratios": [1, 1, 1.5]}
+            )
             fig.patch.set_facecolor("#2b2b2b")
 
             # --- 1. Missing Matrix ---
-            axes[0].imshow(missing_matrix, aspect="auto", cmap="gray_r")
+            missing_cmap = ListedColormap([
+                "#2b2b2b",
+                "#ff6b6b"
+            ])
+
+            axes[0].imshow(missing_matrix, aspect="auto", cmap=missing_cmap)
             axes[0].set_title("Missing Matrix", color="white")
             axes[0].set_xticks([])
             axes[0].set_yticks([])
@@ -1210,30 +1219,46 @@ class OverviewView(ctk.CTkScrollableFrame):
 
             # --- 3. Missing Correlation Heatmap ---
             cmap = plt.get_cmap("coolwarm")
-            heatmap = axes[2].imshow(missing_corr, cmap=cmap, interpolation="nearest")
+
+            heatmap = axes[2].imshow(
+                missing_corr,
+                cmap=cmap,
+                interpolation="nearest",
+                aspect="equal"
+            )
+
             axes[2].set_title("Missing Correlation", color="white")
             axes[2].set_facecolor("#1f1f1f")
 
             axes[2].set_xticks(np.arange(len(missing_corr.columns)))
             axes[2].set_yticks(np.arange(len(missing_corr.columns)))
 
-            axes[2].set_xticklabels(missing_corr.columns, rotation=45, ha="right", color="white")
-            axes[2].set_yticklabels(missing_corr.columns, color="white")
+            axes[2].set_xticklabels(
+                missing_corr.columns,
+                rotation=45,
+                ha="right",
+                color="white"
+            )
+            axes[2].set_yticklabels(
+                missing_corr.columns,
+                color="white"
+            )
 
             axes[2].tick_params(axis="both", which="both", length=0)
 
-            fig.colorbar(heatmap, ax=axes[2]).ax.tick_params(colors="white")
+            # Center the heatmap inside its subplot
+            axes[2].set_anchor("C")
+
+            # Create a dedicated colorbar axis
+            colorbar_ax = axes[2].inset_axes([1.02, 0.0, 0.035, 1.0])
+
+            colorbar = fig.colorbar(heatmap, cax=colorbar_ax)
+            colorbar.ax.tick_params(colors="white")
 
             # Adjust layout
-            plt.subplots_adjust(
-                left=0.05,
-                right=0.95,
-                bottom=0.25,
-                top=0.9,
-                wspace=0.3
+            fig.tight_layout(
+                rect=[0.03, 0.03, 0.97, 0.97]
             )
-
-            fig.tight_layout()
 
             # Embed in Tkinter
             canvas = FigureCanvasTkAgg(fig, master=self.missing_frame)
@@ -1243,9 +1268,6 @@ class OverviewView(ctk.CTkScrollableFrame):
             overlay = ctk.CTkFrame(self.missing_frame, fg_color="transparent")
             overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
 
-            canvas.draw()
-
-            fig.subplots_adjust(bottom=0.25)
             canvas.draw()
 
             plt.close(fig)

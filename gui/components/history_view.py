@@ -233,15 +233,6 @@ class HistoryView(ctk.CTkFrame):
         for widget in self.main_frame.winfo_children():
             widget.destroy()
 
-        def format_args(args):
-            if not args:
-                return ""
-
-            return "\n".join(
-                f"{k}: {v}"
-                for k, v in args.items()
-            )
-
         for branch_id, branch in enumerate(branches):
 
             try:
@@ -490,8 +481,7 @@ class HistoryView(ctk.CTkFrame):
 
                     text=(
                         f"{entry['name']}\n\n"
-                        f"{entry['desc']}\n\n"
-                        f"{format_args(entry['args'])}"
+                        f"{entry['desc']}"
                     ),
 
                     command = lambda

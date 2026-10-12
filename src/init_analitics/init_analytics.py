@@ -34,7 +34,16 @@ def missing_summary(df: pd.DataFrame, unusual_tokens: List[str] | None = None) -
     Summarize missing values and detect unusual tokens used as missing markers.
     """
     if unusual_tokens is None:
-        unusual_tokens = ["?", "-9", "NA", "N/A", "nan"]
+        unusual_tokens = [
+            "",
+            " ",
+            "NA",
+            "N/A",
+            "NULL",
+            "null",
+            "?",
+            "-"
+        ]
 
     total = len(df)
     miss_count = df.isnull().sum()
