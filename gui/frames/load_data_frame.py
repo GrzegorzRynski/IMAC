@@ -20,8 +20,8 @@ class LoadDataView(ctk.CTkFrame):
         self.up_to_date = False
 
         # --- TITLE ---
-        title = ctk.CTkLabel(self, text="Load Dataset", font=("Arial", 22, "bold"))
-        title.pack(pady=20)
+        title = ctk.CTkLabel(self, text="Load Dataset", font=("Arial", 24, "bold"))
+        title.pack(pady=(10, 20))
 
         # --- BUTTON TO LOAD FILE ---
         load_btn = ctk.CTkButton(self, text="Select Data File", command=self.load_file_dialog)

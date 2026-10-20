@@ -284,6 +284,7 @@ class OverviewView(ctk.CTkScrollableFrame):
             variable=self.chart_column_var,
             values=[],
             width=300,
+            state="readonly",
             command=self.update_charts
         )
         self.chart_selector.pack(anchor="w", pady=(0, 20))
@@ -303,6 +304,7 @@ class OverviewView(ctk.CTkScrollableFrame):
         corr_selector = ctk.CTkComboBox(
             correlation_container,
             variable=self.corr_type_var,
+            state="readonly",
             values=["Full", "Numeric", "Categorical"],
             width=300,
             command=lambda _: self.update_correlation()

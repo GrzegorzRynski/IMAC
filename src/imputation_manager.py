@@ -25,10 +25,13 @@ class ImputationManager:
         self.current_index = 0
 
         self.on_change_callbacks = []
+        self.on_save_callbacks = []
 
         self.data_file = "app_data.json"
         self.data_folder = "data"
         self.data = None
+
+        self.settings={"missingness" : {}}
 
         self.action_registry = {
             "load_dataset": self.load_dataset_action,
@@ -42,6 +45,14 @@ class ImputationManager:
 
     def notify_change(self):
         for cb in self.on_change_callbacks:
+            cb()
+
+    def register_save_callback(self, callback):
+        if callback not in self.on_save_callbacks:
+            self.on_save_callbacks.append(callback)
+
+    def notify_save(self):
+        for cb in self.on_save_callbacks:
             cb()
 
     def load_app_data(self):
@@ -67,7 +78,16 @@ class ImputationManager:
 
         self.load_remembered_locations()
 
-        current_path = self.data.get("last_used_file", "")
+        self.init_settings()
+
+        if data is not None:
+            settings = self.data.get("settings", {})
+            current_path = self.data.get("last_used_file", "")
+        else:
+            settings = {}
+            current_path = ""
+
+        self.load_missingness_settings(settings.get("missingness", {}))
 
         if not current_path:
             return
@@ -117,6 +137,52 @@ class ImputationManager:
 
         self.register_update_callback(self.save_app_data)
 
+    def init_settings(self):
+        self.settings.setdefault("missingness", {})
+
+        missingness = self.settings["missingness"]
+        missingness.setdefault("method_settings", {})
+        missingness.setdefault("rng_seeds", {})
+
+        method_settings = missingness["method_settings"]
+        method_settings.setdefault("selected_mechanism", None)
+        method_settings.setdefault("missing_rates", None)
+        method_settings.setdefault("active_methods", None)
+        method_settings.setdefault("mar_predictor", None)
+        method_settings.setdefault("base_rates", None)
+        method_settings.setdefault("strengths", None)
+        method_settings.setdefault("method_columns", None)
+        method_settings.setdefault("method_order", None)
+
+        rng_seeds = missingness["rng_seeds"]
+        rng_seeds.setdefault("seeds", None)
+        rng_seeds.setdefault("current_rng_seed", None)
+
+        missingness.setdefault("pipeline_mode", None)
+
+    def load_missingness_settings(self, settings):
+        missingness = self.settings["missingness"]
+        settings = settings or {}
+
+        method_settings = settings.get("method_settings", {}) or {}
+        target_method_settings = missingness["method_settings"]
+
+        target_method_settings["selected_mechanism"] = method_settings.get("selected_mechanism")
+        target_method_settings["missing_rates"] = method_settings.get("missing_rates")
+        target_method_settings["active_methods"] = method_settings.get("active_methods")
+        target_method_settings["mar_predictor"] = method_settings.get("mar_predictor")
+        target_method_settings["base_rates"] = method_settings.get("base_rates")
+        target_method_settings["strengths"] = method_settings.get("strengths")
+        target_method_settings["method_columns"] = method_settings.get("method_columns")
+        target_method_settings["method_order"] = method_settings.get("method_order")
+
+        rng_seeds = settings.get("rng_seeds", {}) or {}
+        target_rng_seeds = missingness["rng_seeds"]
+
+        target_rng_seeds["seeds"] = rng_seeds.get("seeds")
+        target_rng_seeds["current_rng_seed"] = rng_seeds.get("current_rng_seed")
+
+        missingness["pipeline_mode"] = settings.get("pipeline_mode", "Sequential")
 
     def load_remembered_locations(self) -> None:
 
@@ -140,10 +206,13 @@ class ImputationManager:
 
         history_data = self.df_history.save_history()
 
+        self.notify_save()
+
         data = {
             "recent_files": self.remembered_locations,
             "last_used_file": self.current_path,
-            "history": history_data
+            "history": history_data,
+            "settings": self.settings
         }
 
         with open(data_file, "w") as f:

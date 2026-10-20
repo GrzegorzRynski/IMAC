@@ -7,6 +7,7 @@ import imputation_manager
 from gui.components.history_view import HistoryView
 from gui.frames.load_data_frame import LoadDataView
 from gui.frames.mini_overview_frame import MiniOverviewView
+from gui.frames.missingness_frame import MissingnessView
 from gui.frames.overview_frame import OverviewView
 
 
@@ -56,7 +57,7 @@ class ImputationApp(ctk.CTk):
         self.btn_load = ctk.CTkButton(self.sidebar, text="Load Data", font=("Arial", 15, "bold"), command=self.show_load_data_view)
         self.btn_load.pack(pady=10, fill="x", padx=10)
 
-        self.btn_missing = ctk.CTkButton(self.sidebar, text="Missingness", font=("Arial", 15, "bold"))
+        self.btn_missing = ctk.CTkButton(self.sidebar, text="Missingness", font=("Arial", 15, "bold"), command=self.show_missingness_view)
         self.btn_missing.pack(pady=10, fill="x", padx=10)
 
         self.btn_impute = ctk.CTkButton(self.sidebar, text="Imputation", font=("Arial", 15, "bold"))
@@ -89,9 +90,6 @@ class ImputationApp(ctk.CTk):
         self.current_view.grid(row=0, column=0, sticky="nswe")
         self.current_view.update_view()
 
-    def register_view_change(self, name, callback):
-        self.view_change.append(callback)
-
     def show_overview_view(self):
         if "overview" not in self.views.keys():
             self.views["overview"] = OverviewView(self.main_frame, self)
@@ -111,7 +109,14 @@ class ImputationApp(ctk.CTk):
             self.views["load"] = LoadDataView(self.main_frame, self)
 
         self.switch_view("load")
-        self.show_mini_overview_view()
+        #self.show_mini_overview_view()
+
+    def show_missingness_view(self):
+        if "missingness" not in self.views.keys():
+            self.views["missingness"] = MissingnessView(self.main_frame, self)
+
+        self.switch_view("missingness")
+        #self.show_mini_overview_view()
 
 if __name__ == "__main__":
     app = ImputationApp()
