@@ -356,17 +356,28 @@ class OverviewView(ctk.CTkScrollableFrame):
 
         # Insert rows
         for index, row in page_df.iterrows():
-            values = [index+1] + list(row.values)
+            values = [
+                index + 1 if isinstance(index, int) else index
+            ]
 
-            has_missing = any(
-                v is None or
-                (isinstance(v, float) and pd.isna(v)) or
-                (isinstance(v, str) and v.strip() == "")
-                for v in row.values
-            )
+            has_missing = False
+
+            for value in row.values:
+                if pd.isna(value) or (
+                        isinstance(value, str) and value.strip() == ""
+                ):
+                    values.append("-")
+                    has_missing = True
+                else:
+                    values.append(value)
 
             if has_missing:
-                self.table.insert("", "end", values=values, tags=("missing_row",))
+                self.table.insert(
+                    "",
+                    "end",
+                    values=values,
+                    tags=("missing_row",)
+                )
             else:
                 self.table.insert("", "end", values=values)
 

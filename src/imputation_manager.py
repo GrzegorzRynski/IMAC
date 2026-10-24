@@ -10,6 +10,9 @@ import json
 from history_manager import HistoryManager
 from init_analitics.init_analytics import report, missing_summary
 from load_data import load_data_file
+from miss_sims.missingness import (
+    apply_missingness_pipeline as run_miss_pipeline,
+)
 
 
 class ImputationManager:
@@ -37,6 +40,7 @@ class ImputationManager:
             "load_dataset": self.load_dataset_action,
             "mark_unusual_as_missing": self.mark_unusual_as_missing_action,
             "delete_unusual_rows": self.delete_unusual_rows_action,
+            "apply_missingness_pipeline": self.apply_missingness_pipeline_action
         }
 
     def register_update_callback(self, callback):
@@ -81,8 +85,8 @@ class ImputationManager:
         self.init_settings()
 
         if data is not None:
-            settings = self.data.get("settings", {})
-            current_path = self.data.get("last_used_file", "")
+            settings = self.data.get("settings", {}) or {}
+            current_path = self.data.get("last_used_file", "") or ""
         else:
             settings = {}
             current_path = ""
@@ -146,17 +150,19 @@ class ImputationManager:
 
         method_settings = missingness["method_settings"]
         method_settings.setdefault("selected_mechanism", None)
-        method_settings.setdefault("missing_rates", None)
+        method_settings.setdefault("mcar_missingness_rate", None)
         method_settings.setdefault("active_methods", None)
         method_settings.setdefault("mar_predictor", None)
         method_settings.setdefault("base_rates", None)
         method_settings.setdefault("strengths", None)
         method_settings.setdefault("method_columns", None)
+        method_settings.setdefault("categorical_column_rates", None)
         method_settings.setdefault("method_order", None)
 
         rng_seeds = missingness["rng_seeds"]
         rng_seeds.setdefault("seeds", None)
         rng_seeds.setdefault("current_rng_seed", None)
+        rng_seeds.setdefault("always_random_seed", None)
 
         missingness.setdefault("pipeline_mode", None)
 
@@ -168,12 +174,13 @@ class ImputationManager:
         target_method_settings = missingness["method_settings"]
 
         target_method_settings["selected_mechanism"] = method_settings.get("selected_mechanism")
-        target_method_settings["missing_rates"] = method_settings.get("missing_rates")
+        target_method_settings["mcar_missingness_rate"] = method_settings.get("mcar_missingness_rate")
         target_method_settings["active_methods"] = method_settings.get("active_methods")
         target_method_settings["mar_predictor"] = method_settings.get("mar_predictor")
         target_method_settings["base_rates"] = method_settings.get("base_rates")
         target_method_settings["strengths"] = method_settings.get("strengths")
         target_method_settings["method_columns"] = method_settings.get("method_columns")
+        target_method_settings["categorical_column_rates"] = method_settings.get("categorical_column_rates")
         target_method_settings["method_order"] = method_settings.get("method_order")
 
         rng_seeds = settings.get("rng_seeds", {}) or {}
@@ -181,6 +188,7 @@ class ImputationManager:
 
         target_rng_seeds["seeds"] = rng_seeds.get("seeds")
         target_rng_seeds["current_rng_seed"] = rng_seeds.get("current_rng_seed")
+        target_rng_seeds["always_random_seed"] = rng_seeds.get("always_random_seed")
 
         missingness["pipeline_mode"] = settings.get("pipeline_mode", "Sequential")
 
@@ -290,15 +298,125 @@ class ImputationManager:
             self.current_df = self.delete_unusual_rows_action(self.current_df, True, unusual_tokens=unusual_tokens, unusual_token_count=unusual_token_count)
             self.notify_change()
 
+    def apply_missingness_pipeline(
+            self,
+            active_methods,
+            mcar_missingness_rate,
+            method_columns,
+            categorical_column_rates,
+            method_order,
+            mar_predictor,
+            base_rates,
+            strengths,
+            rng_seed,
+            always_random_seed,
+            pipeline_mode
+    ):
+        df = self.current_df
+
+        if df is None:
+            return
+
+        active = {
+            method: value
+            for method, value in active_methods.items()
+        }
+
+        ordered_methods = [
+            method
+            for method in method_order
+            if active.get(method, False)
+        ]
+
+        if not ordered_methods:
+            return
+
+        mcar_columns = method_columns.get("MCAR", [])
+
+        mar_numeric = {}
+        mar_categorical = {}
+        nmar_numeric = {}
+        nmar_categorical = {}
+
+        if active.get("MAR", False):
+            predictor = mar_predictor
+
+            predictor_is_numeric = pd.api.types.is_numeric_dtype(
+                df[predictor]
+            )
+
+            for target in method_columns.get("MAR", []):
+                if target == predictor:
+                    continue
+
+                if predictor_is_numeric:
+                    mar_numeric[target] = {
+                        "predictor": predictor,
+                        "base_rate": base_rates["MAR"],
+                        "strength": strengths["MAR"],
+                    }
+                else:
+                    predictor_probs = categorical_column_rates.get(
+                        "MAR", {}
+                    ).get(predictor, {})
+
+                    mar_categorical[target] = {
+                        "predictor": predictor,
+                        "predictor_probs": predictor_probs,
+                    }
+
+        if active.get("NMAR", False):
+            for target in method_columns.get("NMAR", []):
+                if pd.api.types.is_numeric_dtype(df[target]):
+                    nmar_numeric[target] = {
+                        "base_rate": base_rates["NMAR"],
+                        "strength": strengths["NMAR"],
+                    }
+                else:
+                    category_probs = categorical_column_rates.get(
+                        "NMAR", {}
+                    ).get(target, {})
+
+                    nmar_categorical[target] = {
+                        "category_probs": category_probs,
+                    }
+
+        if always_random_seed:
+            rng_seed = None
+
+        result_df = self.apply_missingness_pipeline_action(
+            df=df,
+            mcar_rate=mcar_missingness_rate,
+            mcar_columns=mcar_columns,
+            mar_numeric=mar_numeric,
+            mar_categorical=mar_categorical,
+            nmar_numeric=nmar_numeric,
+            nmar_categorical=nmar_categorical,
+            random_state=rng_seed,
+            mode=(
+                "independent"
+                if pipeline_mode== "Independent"
+                else "sequential"
+            ),
+            method_order=ordered_methods,
+        )
+
+        self.current_df = result_df
+        self.notify_change()
+
     # ------------------------- HISTORY LOADING --------------------------------------
 
     def load_dataset_state(self, branch_id, branch_action_id):
         new_state: pd.DataFrame = pd.DataFrame()
 
         for index, action in enumerate(self.df_history.get_history_branch(branch_id)):
-            new_state = self.perform_action(new_state, action["action"], action["args"])
-            if index == branch_action_id:
-                break
+            try:
+                new_state = self.perform_action(new_state, action["action"], action["args"])
+                if index == branch_action_id:
+                    break
+            except ValueError as exc:
+                pass #FILL THIS EXCEPTION TMP
+
 
         self.current_df = new_state
         self.notify_change()
@@ -372,9 +490,56 @@ class ImputationManager:
                 action_name="delete_unusual_rows",
                 args={
                     "unusual_tokens": unusual_tokens,
-                    "unusual_token_count":unusual_token_count
+                    "unusual_token_count": unusual_token_count
                 },
                 name="Delete Rows With Unusual Tokens",
                 desc=f"{count - len(df)} rows deleted"
             )
         return df
+
+    def apply_missingness_pipeline_action(self, df: pd.DataFrame, add_history_entry: bool = True, **kwargs) -> pd.DataFrame:
+
+        mcar_rate = kwargs.get("mcar_rate", None)
+        mcar_columns = kwargs.get("mcar_columns", None)
+        mar_numeric = kwargs.get("mar_numeric", None)
+        mar_categorical = kwargs.get("mar_categorical", None)
+        nmar_numeric = kwargs.get("nmar_numeric", None)
+        nmar_categorical = kwargs.get("nmar_categorical", None)
+        random_state = kwargs.get("random_state", None)
+        mode = kwargs.get("mode", None)
+        method_order = kwargs.get("method_order", None)
+
+        result_df, missing_mask = run_miss_pipeline(
+            df=df,
+            mcar_rate=mcar_rate,
+            mcar_columns=mcar_columns,
+            mar_numeric=mar_numeric,
+            mar_categorical=mar_categorical,
+            nmar_numeric=nmar_numeric,
+            nmar_categorical=nmar_categorical,
+            random_state=random_state,
+            mode=mode,
+            method_order=method_order,
+        )
+
+        if add_history_entry:
+            colnum = len({*mcar_columns, *nmar_categorical.keys(), *mar_numeric.keys(), *mar_categorical.keys(), *nmar_numeric.keys()})
+            self.df_history.add_action(
+                action_id=3,
+                action_name="apply_missingness_pipeline",
+                args={
+                    "mcar_rate": mcar_rate,
+                    "mcar_columns": mcar_columns,
+                    "mar_numeric": mar_numeric,
+                    "mar_categorical": mar_categorical,
+                    "nmar_numeric": nmar_numeric,
+                    "nmar_categorical": nmar_categorical,
+                    "random_state": random_state,
+                    "mode": mode,
+                    "method_order": method_order,
+                },
+                name="Simulate missingness on dataset",
+                desc=f"Methods: {", ".join(method_order)}\nMode: {mode}\nSeed: {random_state}\nNumber of columns: {colnum}"
+            )
+
+        return result_df

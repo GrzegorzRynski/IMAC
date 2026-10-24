@@ -19,6 +19,8 @@ class LoadDataView(ctk.CTkFrame):
 
         self.up_to_date = False
 
+        self.show_history = False
+
         # --- TITLE ---
         title = ctk.CTkLabel(self, text="Load Dataset", font=("Arial", 24, "bold"))
         title.pack(pady=(10, 20))

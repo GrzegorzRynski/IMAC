@@ -69,7 +69,10 @@ def generate_mar(
     x_std = np.nanstd(x) if np.nanstd(x) > 0 else 1.0
     x_stdized = (x - x_mean) / x_std
 
-    logits = base_rate + strength * x_stdized
+    base_prob = np.clip(base_rate, 1e-6, 1 - 1e-6)
+    base_logit = np.log(base_prob / (1 - base_prob))
+
+    logits = base_logit + strength * x_stdized
 
     probs = _sigmoid(logits)
 
@@ -114,8 +117,10 @@ def generate_nmar(
     x_std = np.nanstd(x) if np.nanstd(x) > 0 else 1.0
     x_stdized = (x - x_mean) / x_std
 
-    logits = base_rate + strength * x_stdized
+    base_prob = np.clip(base_rate, 1e-6, 1 - 1e-6)
+    base_logit = np.log(base_prob / (1 - base_prob))
 
+    logits = base_logit + strength * x_stdized
     probs = _sigmoid(logits)
 
     n = len(df_missing)
@@ -199,24 +204,31 @@ def generate_nmar_categorical(
 def apply_missingness_pipeline(
     df: pd.DataFrame,
     mcar_rate: float = 0.0,
+    mcar_columns: Optional[List[str]] = None,
     mar_numeric: Optional[Dict[str, Dict]] = None,
     mar_categorical: Optional[Dict[str, Dict]] = None,
     nmar_numeric: Optional[Dict[str, Dict]] = None,
     nmar_categorical: Optional[Dict[str, Dict]] = None,
     random_state: Optional[int] = None,
-    mode: str = "sequential"
+    mode: str = "sequential",
+    method_order: Optional[List[str]] = None
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Apply multiple missingness mechanisms (MCAR, MAR, NMAR) to a dataset.
     """
 
     if mode not in ("sequential", "independent"):
-        raise ValueError("mode must be 'sequential' or 'independent'")
+        mode = "sequential"
+
+    if method_order is None:
+        method_order = ["MCAR", "MAR", "NMAR"]
 
     base_rng = np.random.default_rng(random_state)
 
-    df_original = df.copy()
-    df_current = df.copy()
+    if mode == "sequential":
+        df_current = df.copy()
+    elif mode == "independent":
+        df_original = df.copy()
 
     final_mask = pd.DataFrame(False, index=df.index, columns=df.columns)
 
@@ -225,54 +237,72 @@ def apply_missingness_pipeline(
 
     def run_method(func, *args, **kwargs):
         nonlocal final_mask
-        seed = next_seed()
-        kwargs["random_state"] = seed
+
+        kwargs["random_state"] = next_seed()
+
         if mode == "sequential":
             nonlocal df_current
             df_current, mask = func(df_current, *args, **kwargs)
             final_mask |= mask
         elif mode == "independent":
-            df_tmp, mask = func(df_original, *args, **kwargs)
+            _, mask = func(df_original, *args, **kwargs)
             final_mask |= mask
 
-    if mcar_rate > 0:
-        run_method(generate_mcar, rate=mcar_rate)
+    for method in method_order:
 
-    if mar_numeric:
-        for target, params in mar_numeric.items():
-            run_method(
-                generate_mar,
-                target=target,
-                predictor=params["predictor"],
-                base_rate=params.get("base_rate", 0.1),
-                strength=params.get("strength", 0.5)
-            )
+        if method == "MCAR" and mcar_rate > 0:
+            if mcar_columns:
+                run_method(
+                    generate_mcar,
+                    rate=mcar_rate,
+                    columns=mcar_columns,
+                )
 
-    if mar_categorical:
-        for target, params in mar_categorical.items():
-            run_method(
-                generate_mar_categorical,
-                target=target,
-                predictor=params["predictor"],
-                predictor_probs=params["predictor_probs"]
-            )
+        elif method == "MAR":
+            for target, params in (mar_numeric or {}).items():
+                run_method(
+                    generate_mar,
+                    target=target,
+                    **params,
+                )
 
-    if nmar_numeric:
-        for target, params in nmar_numeric.items():
-            run_method(
-                generate_nmar,
-                target=target,
-                base_rate=params.get("base_rate", 0.1),
-                strength=params.get("strength", 0.5)
-            )
+            for target, params in (mar_categorical or {}).items():
+                run_method(
+                    generate_mar_categorical,
+                    target=target,
+                    **params,
+                )
 
-    if nmar_categorical:
-        for target, params in nmar_categorical.items():
-            run_method(
-                generate_nmar_categorical,
-                target=target,
-                category_probs=params["category_probs"]
-            )
+        elif method == "NMAR":
+            for target, params in (nmar_numeric or {}).items():
+                run_method(
+                    generate_nmar,
+                    target=target,
+                    base_rate=params.get("base_rate", 0.1),
+                    strength=params.get("strength", 0.5)
+                )
+
+            for target, params in (nmar_categorical or {}).items():
+                run_method(
+                    generate_nmar_categorical,
+                    target=target,
+                    category_probs=params["category_probs"]
+                )
+
+        elif method == "NMAR":
+            for target, params in (nmar_numeric or {}).items():
+                run_method(
+                    generate_nmar,
+                    target=target,
+                    **params,
+                )
+
+            for target, params in (nmar_categorical or {}).items():
+                run_method(
+                    generate_nmar_categorical,
+                    target=target,
+                    **params,
+                )
 
     if mode == "independent":
         df_final = df_original.copy()

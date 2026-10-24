@@ -4,6 +4,10 @@ from tkinter import font
 
 import customtkinter as ctk
 import pandas as pd
+from sklearn import pipeline
+
+from gui.components.history_view import HistoryView
+from init_analitics.init_analytics import infer_column_types
 
 
 class MissingnessView(ctk.CTkScrollableFrame):
@@ -14,13 +18,15 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         if self.app.manager.current_df is not None:
             self.current_columns = self.app.manager.current_df.columns
+            self.cat_columns = infer_column_types(self.app.manager.current_df)["categorical"]
         else:
             self.current_columns = pd.Series()
+            self.cat_columns = []
 
         self.up_to_date = False
 
         self.selected_mechanism = ctk.StringVar(value="MCAR")
-        self.missing_rates = {}
+        self.mcar_missingness_rate_var = ctk.DoubleVar(value=20.0)
 
         self.methods_active = {}
 
@@ -34,9 +40,14 @@ class MissingnessView(ctk.CTkScrollableFrame):
                              "NMAR" : {}}
 
         self.column_checkboxes = {}
+        self.cat_column_rates = { "MAR" : {},
+                                  "NMAR" : {}}
+        self.prev_cat_cols = []
+        self.prev_mechanism = ""
         self.method_order = [ctk.StringVar(value="MCAR"), ctk.StringVar(value="MAR") ,ctk.StringVar(value="NMAR")]
         self.seed_var = ctk.StringVar(value="")
         self.seeds = []
+        self.always_random_var = ctk.BooleanVar(value=False)
         self.pipeline_var = ctk.StringVar(value="")
 
         # --- TITLE ---
@@ -57,6 +68,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
         self.content_frame.grid_columnconfigure((0, 1), weight=1)
         self.content_frame.grid_rowconfigure(0, weight=1)
         self.content_frame.grid_rowconfigure(1, weight=0)
+        self.content_frame.grid_rowconfigure(2, weight=0)
 
         self.load_settings()
 
@@ -64,8 +76,11 @@ class MissingnessView(ctk.CTkScrollableFrame):
         self.create_settings_panel(self.content_frame)
 
         self.create_columns_panel(self.content_frame)
+        self.create_categories_settings_panel(self.content_frame)
         self.create_general_settings_panel(self.content_frame)
         self.create_footer()
+
+        self.history = HistoryView(self, self.app.manager.df_history, self)
 
         if not self.current_columns.empty:
             self.content_frame.pack(pady=20, padx=20, fill="both")
@@ -82,18 +97,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
         method_settings = settings.get("method_settings", {})
 
         self.selected_mechanism.set(method_settings.get("selected_mechanism", "MCAR") or "MCAR")
-        missing_rates = method_settings.get("missing_rates", {}) or {}
-        if missing_rates:
-            self.missing_rates = {
-                method: ctk.DoubleVar(value=value)
-                for method, value in missing_rates.items()
-            }
-        else:
-            self.missing_rates = {
-                "MCAR" : ctk.DoubleVar(value=20.0),
-                "MAR": ctk.DoubleVar(value=20.0),
-                "NMAR": ctk.DoubleVar(value=20.0)
-            }
+        self.mcar_missingness_rate_var.set(method_settings.get("mcar_missingness_rate", 20.0) or 20.0)
 
         active_methods = method_settings.get("active_methods", {}) or {}
         if active_methods:
@@ -151,6 +155,19 @@ class MissingnessView(ctk.CTkScrollableFrame):
                 for column in self.current_columns:
                     self.column_vars[mechanism][column] = ctk.BooleanVar(value=False)
 
+        method_categorical_column_rates = method_settings.get("categorical_column_rates", {}) or {}
+        if method_categorical_column_rates:
+            self.cat_column_rates =  {
+                method: {
+                    column: {
+                        category: ctk.DoubleVar(value=value)
+                        for category, value in categories.items()
+                    }
+                    for column, categories in columns.items()
+                }
+                for method, columns in method_categorical_column_rates.items()
+            }
+
         method_order = method_settings.get("method_order", []) or []
         if method_order:
             self.method_order = [
@@ -161,8 +178,11 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         seed_settings = settings.get("rng_seeds", {}) or {}
 
-        self.seeds = seed_settings.get("seeds", []) or []
+        raw_seeds = seed_settings.get("seeds", []) or []
+
+        self.seeds = [s for s in raw_seeds if isinstance(s, str) and s.isdigit()]
         self.seed_var.set(seed_settings.get("current_rng_seed", "") or "")
+        self.always_random_var.set(seed_settings.get("always_random_seed", False) or False)
         self.pipeline_var.set(settings.get("pipeline_mode", "Sequential") or "Sequential")
 
     def save_settings(self):
@@ -172,10 +192,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         method_settings["selected_mechanism"] = self.selected_mechanism.get()
 
-        method_settings["missing_rates"] = {
-            method: var.get()
-            for method, var in self.missing_rates.items()
-        }
+        method_settings["mcar_missingness_rate"] = self.mcar_missingness_rate_var.get()
 
         method_settings["active_methods"] = {
             method: var.get()
@@ -202,6 +219,17 @@ class MissingnessView(ctk.CTkScrollableFrame):
             for method, columns in self.column_vars.items()
         }
 
+        method_settings["categorical_column_rates"] = {
+            method: {
+                column: {
+                    category : var.get()
+                    for category, var in categories.items()
+                }
+                for column, categories in columns.items()
+            }
+            for method, columns in self.cat_column_rates.items()
+        }
+
         method_settings["method_order"] = [
             method.get()
             for method in self.method_order
@@ -209,6 +237,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         rng_seeds["seeds"] = self.seeds
         rng_seeds["current_rng_seed"] = self.seed_var.get()
+        rng_seeds["always_random_seed"] = self.always_random_var.get()
 
         settings["pipeline_mode"] = self.pipeline_var.get()
 
@@ -221,22 +250,29 @@ class MissingnessView(ctk.CTkScrollableFrame):
             if self.app.manager.current_df is None:
                 self.content_frame.pack_forget()
                 self.footer_frame.pack_forget()
+                self.history.pack_forget()
                 self.no_dataset_frame.pack(pady=5)
                 return
 
             self.no_dataset_frame.pack_forget()
             self.content_frame.pack(pady=20, padx=20, fill="both")
             self.footer_frame.pack(pady=20)
+            self.history.pack(fill="both", expand=True)
+
+            self.history.render_history()
 
             if self.current_columns.equals(df.columns):
                 return
 
             self.current_columns = df.columns
+            self.cat_columns = infer_column_types(self.app.manager.current_df)["categorical"]
+            self.cat_column_rates = {"MAR": {},
+                                     "NMAR": {}}
 
             self.update_settings_panel()
+            self.update_categories_settings_panel()
             self.update_columns_panel()
             self.update_general_settings_panel()
-
 
     def on_update(self):
         self.up_to_date = False
@@ -277,7 +313,10 @@ class MissingnessView(ctk.CTkScrollableFrame):
                 text=mechanism,
                 variable=self.selected_mechanism,
                 value=mechanism,
-                command=self.on_mechanism_changed
+                command=lambda: (
+                    self.on_mechanism_changed(),
+                    self.update_categories_settings_panel()
+                )
             ).grid(row=0, column=0, sticky="w")
 
             ctk.CTkLabel(
@@ -311,29 +350,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         ctk.CTkLabel(
             panel,
-            text="Missingness rate",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(0, 5))
-
-        self.rate_label = ctk.CTkLabel(
-            panel,
-            text="20%"
-        )
-        self.rate_label.pack(anchor="w", padx=15)
-
-        self.rate_slider = ctk.CTkSlider(
-            panel,
-            from_=1,
-            to=100,
-            number_of_steps=99,
-            variable=self.missing_rates[self.selected_mechanism.get()],
-            command=lambda value, label=self.rate_label: self.on_rate_changed(value, label),
-        )
-        self.rate_slider.pack(fill="x", padx=15, pady=(5, 10))
-
-        ctk.CTkLabel(
-            panel,
-            text="Additional parameters",
+            text="Parameters",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(10, 5))
 
@@ -352,7 +369,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         self.parameters_label = ctk.CTkLabel(
             parameters_frame,
-            text="Default MCAR settings",
+            text="MCAR missingness rate",
             wraplength=450,
             justify="left"
         )
@@ -361,7 +378,25 @@ class MissingnessView(ctk.CTkScrollableFrame):
             pady=(15, 5)
         )
 
-        self.parameter_frames["MCAR"] = ctk.CTkFrame(parameters_frame, fg_color="transparent")
+        mcar_frame = ctk.CTkFrame(parameters_frame, fg_color="transparent")
+
+        self.mcar_rate_label = ctk.CTkLabel(
+            mcar_frame,
+            text=f"{int(self.mcar_missingness_rate_var.get())}%"
+        )
+        self.mcar_rate_label.pack(anchor="w", padx=15)
+
+        self.mcar_rate_slider = ctk.CTkSlider(
+            mcar_frame,
+            from_=1,
+            to=100,
+            number_of_steps=99,
+            variable=self.mcar_missingness_rate_var,
+            command=lambda value, label=self.mcar_rate_label: self.on_rate_changed(value, label),
+        )
+        self.mcar_rate_slider.pack(fill="x", padx=15, pady=(5, 10))
+
+        self.parameter_frames["MCAR"] = mcar_frame
 
         mar_frame = ctk.CTkFrame(parameters_frame, fg_color="transparent")
         mar_frame.grid_propagate(False)
@@ -380,6 +415,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
             width=200,
             variable=self.mar_predictor_var,
             values=self.current_columns,
+            command=lambda choice: self.update_categories_settings_panel(),
             state="readonly"
         )
         self.mar_predictor_combobox.pack(anchor="nw", pady=(0, 5))
@@ -387,11 +423,11 @@ class MissingnessView(ctk.CTkScrollableFrame):
         mar_rate_frame = ctk.CTkFrame(mar_frame, fg_color="transparent")
         mar_rate_frame.grid(row=0, column=1, pady=5, sticky="nw")
 
-        mar_rate_label = ctk.CTkLabel(
+        self.mar_rate_label = ctk.CTkLabel(
             mar_rate_frame,
             text=f"Base rate: {self.base_rates['MAR'].get()}%"
         )
-        mar_rate_label.pack(anchor="nw")
+        self.mar_rate_label.pack(anchor="nw")
 
         self.mar_rate_slider = ctk.CTkSlider(
             mar_rate_frame,
@@ -399,18 +435,18 @@ class MissingnessView(ctk.CTkScrollableFrame):
             to=100,
             number_of_steps=99,
             variable=self.base_rates["MAR"],
-            command=lambda value, label=mar_rate_label: self.on_rate_changed(value, label,"Base rate: "),
+            command=lambda value, label=self.mar_rate_label: self.on_rate_changed(value, label,"Base rate: "),
         )
         self.mar_rate_slider.pack(fill="x", anchor="nw", pady=5)
 
         mar_strength_frame = ctk.CTkFrame(mar_frame, fg_color="transparent")
         mar_strength_frame.grid(row=0, column=2, pady=5, sticky="nw")
 
-        mar_strength_label = ctk.CTkLabel(
+        self.mar_strength_label = ctk.CTkLabel(
             mar_strength_frame,
             text=f"Strength: {self.strengths['MAR'].get()}%"
         )
-        mar_strength_label.pack(anchor="nw")
+        self.mar_strength_label.pack(anchor="nw")
 
         self.mar_strength_slider = ctk.CTkSlider(
             mar_strength_frame,
@@ -418,13 +454,11 @@ class MissingnessView(ctk.CTkScrollableFrame):
             to=100,
             number_of_steps=99,
             variable=self.strengths["MAR"],
-            command=lambda value, label=mar_strength_label: self.on_rate_changed(value, label, "Strength: "),
+            command=lambda value, label=self.mar_strength_label: self.on_rate_changed(value, label, "Strength: "),
         )
         self.mar_strength_slider.pack(fill="x", anchor="nw", pady=5)
 
         self.parameter_frames["MAR"] = mar_frame
-
-        self.parameter_frames["NMAR"] = ctk.CTkFrame(parameters_frame, fg_color="transparent")
 
         nmar_frame = ctk.CTkFrame(parameters_frame, fg_color="transparent")
         nmar_frame.grid_propagate(False)
@@ -435,11 +469,11 @@ class MissingnessView(ctk.CTkScrollableFrame):
         nmar_rate_frame = ctk.CTkFrame(nmar_frame, fg_color="transparent")
         nmar_rate_frame.grid(row=0, column=0, pady=5)
 
-        nmar_rate_label = ctk.CTkLabel(
+        self.nmar_rate_label = ctk.CTkLabel(
             nmar_rate_frame,
             text=f"Base rate: {self.base_rates['NMAR'].get()}%"
         )
-        nmar_rate_label.pack(anchor="nw")
+        self.nmar_rate_label.pack(anchor="nw")
 
         self.nmar_rate_slider = ctk.CTkSlider(
             nmar_rate_frame,
@@ -447,18 +481,18 @@ class MissingnessView(ctk.CTkScrollableFrame):
             to=100,
             number_of_steps=99,
             variable=self.base_rates["NMAR"],
-            command=lambda value, label=nmar_rate_label: self.on_rate_changed(value, label, "Base rate: "),
+            command=lambda value, label=self.nmar_rate_label: self.on_rate_changed(value, label, "Base rate: "),
         )
         self.nmar_rate_slider.pack(fill="x", anchor="nw", pady=5)
 
         nmar_strength_frame = ctk.CTkFrame(nmar_frame, fg_color="transparent")
         nmar_strength_frame.grid(row=0, column=1, pady=5)
 
-        nmar_strength_label = ctk.CTkLabel(
+        self.nmar_strength_label = ctk.CTkLabel(
             nmar_strength_frame,
             text=f"Strength: {self.strengths['NMAR'].get()}%"
         )
-        nmar_strength_label.pack(anchor="nw")
+        self.nmar_strength_label.pack(anchor="nw")
 
         self.nmar_strength_slider = ctk.CTkSlider(
             nmar_strength_frame,
@@ -466,7 +500,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
             to=100,
             number_of_steps=99,
             variable=self.strengths["NMAR"],
-            command=lambda value, label=nmar_strength_label: self.on_rate_changed(value, label,"Strength: "),
+            command=lambda value, label=self.nmar_strength_label: self.on_rate_changed(value, label,"Strength: "),
         )
         self.nmar_strength_slider.pack(fill="x", anchor="nw", pady=5)
 
@@ -475,7 +509,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
         mechanism = self.selected_mechanism.get()
 
         descriptions = {
-            "MCAR": "Default MCAR settings",
+            "MCAR": "MCAR missingness rate",
             "MAR": "Configure predictor columns and dependencies",
             "NMAR": "Configure dependencies on the missing values themselves"
         }
@@ -483,9 +517,6 @@ class MissingnessView(ctk.CTkScrollableFrame):
         self.parameters_label.configure(
             text=descriptions[mechanism]
         )
-
-        self.rate_slider.configure(variable=self.missing_rates[mechanism])
-        self.on_rate_changed(self.missing_rates[mechanism].get(), self.rate_label)
 
         for frame in self.parameter_frames.values():
             frame.pack_forget()
@@ -522,13 +553,19 @@ class MissingnessView(ctk.CTkScrollableFrame):
         ctk.CTkButton(
             column_button_frame,
             text="Select All",
-            command=lambda: self.set_all_columns(True)
+            command=lambda: (
+                self.set_all_columns(True),
+                self.update_categories_settings_panel()
+            )
         ).grid(row=0,column=0,sticky="w",padx=5)
 
         ctk.CTkButton(
             column_button_frame,
             text="Clear All",
-            command = lambda: self.set_all_columns(False)
+            command = lambda: (
+                self.set_all_columns(False),
+                self.update_categories_settings_panel()
+            )
         ).grid(row=0, column=1, sticky="w", padx=5)
 
         self.columns_frame = ctk.CTkScrollableFrame(
@@ -551,7 +588,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
     def create_general_settings_panel(self, parent):
         panel = ctk.CTkFrame(parent, corner_radius=10, height=200)
         panel.grid(
-            row=1,
+            row=2,
             column=0,
             columnspan=2,
             pady=6,
@@ -594,6 +631,10 @@ class MissingnessView(ctk.CTkScrollableFrame):
         self.create_pipeline_mode_panel()
         self.update_general_settings_panel()
 
+    def create_categories_settings_panel(self, parent):
+        self.categories_settings_panel = ctk.CTkScrollableFrame(parent, corner_radius=10, height=400)
+        self.update_categories_settings_panel()
+
     def create_footer(self):
         footer = self.footer_frame
 
@@ -626,6 +667,165 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         self.create_columns()
 
+    def update_categories_settings_panel(self):
+        if self.selected_mechanism.get() not in ("MAR", "NMAR"):
+            self.categories_settings_panel.grid_forget()
+            self.prev_mechanism = self.selected_mechanism.get()
+            return
+
+        if self.selected_mechanism.get() == "MAR":
+
+            predictor = self.mar_predictor_var.get()
+
+            if predictor in self.cat_columns:
+                columns = [predictor]
+            else:
+                columns = []
+
+        elif self.selected_mechanism.get() == "NMAR":
+
+            columns = [
+                col
+                for col, var in self.column_vars["NMAR"].items()
+                if var.get() and col in self.cat_columns
+            ]
+
+        if self.prev_cat_cols == columns and self.prev_mechanism == self.selected_mechanism.get():
+            return
+
+        self.prev_cat_cols = columns
+        self.prev_mechanism = self.selected_mechanism.get()
+
+        if len(columns) == 0:
+            self.categories_settings_panel.grid_forget()
+            return
+
+        self.categories_settings_panel.grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            pady=(6, 0),
+            sticky="nsew"
+        )
+
+        for widget in self.categories_settings_panel.winfo_children():
+            widget.destroy()
+
+        ctk.CTkLabel(
+            self.categories_settings_panel,
+            text="Categories missingness rates",
+            font=('Arial', 22, 'bold'),
+        ).pack(anchor="n")
+
+        def set_all_category_rates(mechanism, col, value, labels):
+            for var in self.cat_column_rates[mechanism][col].values():
+                var.set(value)
+            for label in labels:
+                label.configure(text=f"{value}%")
+
+        def create_category_section(
+                parent,
+                mechanism,
+                column_name,
+                cats
+        ):
+            section = ctk.CTkFrame(parent)
+
+            section.pack(
+                fill="x",
+                padx=5,
+                pady=5
+            )
+
+            ctk.CTkLabel(
+                section,
+                text=column_name,
+                font=("Arial", 16, "bold")
+            ).pack(anchor="w")
+
+            preset_frame = ctk.CTkFrame(
+                section,
+                fg_color="transparent"
+            )
+
+            preset_frame.pack(
+                fill="x",
+                pady=(5, 10)
+            )
+
+            labels = []
+
+            for category in cats:
+                row = ctk.CTkFrame(
+                    section,
+                    fg_color="transparent"
+                )
+
+                row.pack(fill="x")
+
+                ctk.CTkLabel(
+                    row,
+                    text=str(category),
+                    width=150
+                ).pack(side="left")
+
+                value_label = ctk.CTkLabel(
+                    row,
+                    text=f"{int(self.cat_column_rates[self.selected_mechanism.get()][column][category].get())}%"
+                )
+
+                labels.append(value_label)
+
+                slider = ctk.CTkSlider(
+                    row,
+                    from_=0,
+                    to=100,
+                    variable=self.cat_column_rates[self.selected_mechanism.get()][column][category],
+                    command=lambda value,
+                                   label=value_label:
+                    label.configure(
+                        text=f"{value:.0f}%"
+                    )
+                )
+
+                slider.pack(side="left")
+                value_label.pack(side="left")
+
+            for preset in [0, 10, 25, 50, 75]:
+                ctk.CTkButton(
+                    preset_frame,
+                    text=f"{preset}%",
+                    width=50,
+                    command=lambda
+                        p=preset,
+                        mech=mechanism,
+                        col=column_name:
+                    set_all_category_rates(
+                        mech,
+                        col,
+                        p,
+                        labels
+                    )
+                ).pack(side="left", padx=2)
+
+        for column in columns:
+            categories = sorted(
+                self.app.manager.current_df[column]
+                .dropna()
+                .unique()
+            )
+
+            if column in self.cat_column_rates[self.selected_mechanism.get()].keys():
+                if categories != self.cat_column_rates[self.selected_mechanism.get()][column].keys():
+                    self.cat_column_rates[self.selected_mechanism.get()].pop(column, None)
+
+            if column not in self.cat_column_rates[self.selected_mechanism.get()].keys():
+                self.cat_column_rates[self.selected_mechanism.get()][column] = {
+                    category : ctk.DoubleVar(value=0.0) for category in categories
+                }
+
+            create_category_section(self.categories_settings_panel, self.selected_mechanism.get(), column, categories)
+
     def create_columns(self):
         for widget in self.columns_frame.winfo_children():
             widget.destroy()
@@ -636,7 +836,8 @@ class MissingnessView(ctk.CTkScrollableFrame):
             checkbox = ctk.CTkCheckBox(
                 self.columns_frame,
                 text=str(column),
-                variable=self.column_vars[self.selected_mechanism.get()][column]
+                variable=self.column_vars[self.selected_mechanism.get()][column],
+                command=self.update_categories_settings_panel
             )
             checkbox.pack(anchor="w", padx=5, pady=5)
             self.column_checkboxes[column] = checkbox
@@ -728,7 +929,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
         btn_random = ctk.CTkButton(
             action_row,
-            text="🎲 Generate Random",
+            text="Generate Random",
             width=150,
             command=self.generate_random_seed
         )
@@ -744,6 +945,15 @@ class MissingnessView(ctk.CTkScrollableFrame):
             command=self.add_manual_seed
         )
         btn_add.pack(side="left")
+
+        always_random_row = ctk.CTkFrame(self.seed_panel, fg_color="transparent")
+        always_random_row.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkCheckBox(
+            always_random_row,
+            variable=self.always_random_var,
+            text="Always Random Seed"
+        ).pack(side="left")
 
     def create_pipeline_mode_panel(self):
         pipeline_combobox = ctk.CTkComboBox(
@@ -786,7 +996,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
     def generate_random_seed(self):
         random_seed = str(random.randint(0, 999999))
-        if random_seed not in self.app.manager.rng_seeds:
+        if random_seed not in self.seeds:
             self.seeds.append(random_seed)
             self.seed_combobox.configure(values=self.seeds)
 
@@ -811,7 +1021,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
             self.seeds.remove(current_seed)
             self.seed_combobox.configure(values=self.seeds)
             if len(self.seeds) > 0:
-                self.seed_var.set(self.app.manager.rng_seeds[0])
+                self.seed_var.set(self.seeds[0])
             else:
                 self.seed_var.set("")
 
@@ -828,7 +1038,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
         mechanism = self.selected_mechanism.get()
 
         descriptions = {
-            "MCAR": "Default MCAR settings",
+            "MCAR": "MCAR missingness rate",
             "MAR": "Configure predictor columns and dependencies",
             "NMAR": "Configure dependencies on the missing values themselves"
         }
@@ -836,9 +1046,6 @@ class MissingnessView(ctk.CTkScrollableFrame):
         self.parameters_label.configure(
             text=descriptions[mechanism]
         )
-
-        self.rate_slider.configure(variable=self.missing_rates[mechanism])
-        self.on_rate_changed(self.missing_rates[mechanism].get(), self.rate_label)
 
         for frame in self.parameter_frames.values():
             frame.pack_forget()
@@ -864,29 +1071,188 @@ class MissingnessView(ctk.CTkScrollableFrame):
 
     def reset_settings(self):
         self.selected_mechanism.set("MCAR")
-        for missing_rate in self.missing_rates.values():
-            missing_rate.set(20.0)
+        self.mcar_missingness_rate_var.set(20.0)
 
         for active_method in self.methods_active.values():
             active_method.set(False)
 
+        self.mar_predictor_var.set(self.current_columns[0] if len(self.current_columns) > 0 else "")
+
+        for var in self.base_rates.values():
+            var.set(10.0)
+
+        for var in self.strengths.values():
+            var.set(10.0)
+
+        self.mar_rate_label.configure(text = f"Base rate: {self.base_rates['MAR'].get()}%")
+        self.mar_strength_label.configure(text = f"Strength: {self.strengths['MAR'].get()}%")
+        self.nmar_rate_label.configure(text = f"Base rate: {self.base_rates['NMAR'].get()}%")
+        self.nmar_strength_label.configure(text = f"Strength: {self.strengths['NMAR'].get()}%")
+
+        for cols in self.cat_column_rates.values():
+            cols.clear()
+
+        self.prev_cat_cols.clear()
+
+        self.method_order[0].set("MCAR")
+        self.method_order[1].set("MAR")
+        self.method_order[2].set("NMAR")
+
+        if len(self.seeds) > 0:
+            self.seed_var.set(self.seeds[0])
+        else:
+            self.seed_var.set("")
+
+        self.always_random_var.set(False)
+
+        self.pipeline_var.set("Sequential")
+
         self.on_mechanism_changed()
-        self.on_rate_changed(20.0, self.rate_label)
+        self.on_rate_changed(20.0, self.mcar_rate_label)
         self.reset_columns()
+        self.update_categories_settings_panel()
 
     def simulate_missingness(self):
-        # mechanism = self.selected_mechanism.get()
-        # rate = self.missing_rates.get()
-        #
-        # selected_columns = [
-        #     column
-        #     for column, variable in self.column_vars.items()
-        #     if variable.get()
-        # ]
+        df = self.app.manager.current_df
 
-        #TMP
+        if df is None:
+            return
+
+        active_methods = {
+            method: var.get()
+            for method, var in self.methods_active.items()
+        }
+
+        method_order = [
+            var.get()
+            for var in self.method_order
+        ]
+
+        method_columns = {
+            method: [
+                column
+                for column, var in columns.items()
+                if var.get()
+            ]
+            for method, columns in self.column_vars.items()
+        }
+
+        categorical_column_rates = {
+            method: {
+                column: {
+                    category: var.get() / 100.0
+                    for category, var in categories.items()
+                }
+                for column, categories in columns.items()
+            }
+            for method, columns in self.cat_column_rates.items()
+        }
+
+        mcar_missingness_rate = self.mcar_missingness_rate_var.get() / 100.0
+
+        base_rates = {
+            method: var.get() / 100.0
+            for method, var in self.base_rates.items()
+        }
+
+        strengths = {
+            method: var.get() / 100.0
+            for method, var in self.strengths.items()
+        }
+
+        mar_predictor = self.mar_predictor_var.get()
+
+        always_random_seed = self.always_random_var.get()
+        rng_seed = self.seed_var.get().strip()
+
+        if not always_random_seed:
+            if not rng_seed or rng_seed == "":
+                rng_seed = None
+            try:
+                rng_seed = int(rng_seed)
+            except (ValueError, TypeError):
+                rng_seed = None
+        else:
+            rng_seed = None
+
+        pipeline_mode = self.pipeline_var.get()
+
+        valid_method = False
+
+        for method in method_order:
+            if not active_methods.get(method, False):
+                continue
+
+            targets = method_columns.get(method, [])
+            if len(targets) == 0:
+                continue
+
+            if method == "MCAR":
+                valid_method = (
+                        mcar_missingness_rate > 0
+                        and len(targets) > 0
+                )
+
+            elif method == "MAR":
+                targets = [
+                    col for col in targets
+                    if col != mar_predictor
+                ]
+
+                if not targets:
+                    continue
+
+                if pd.api.types.is_numeric_dtype(df[mar_predictor]):
+                    valid_method = base_rates["MAR"] > 0 or strengths["MAR"] > 0
+                else:
+                    predictor_rates = (
+                        categorical_column_rates
+                        .get("MAR", {})
+                        .get(mar_predictor, {})
+                    )
+                    valid_method = any(
+                        rate > 0 for rate in predictor_rates.values()
+                    )
+
+            elif method == "NMAR":
+                rates = base_rates["MAR"] > 0 or strengths["MAR"] > 0
+                for target in targets:
+                    if pd.api.types.is_numeric_dtype(df[target]):
+                        if rates:
+                            valid_method = True
+                            break
+
+                    category_rates = (
+                        categorical_column_rates
+                        .get("NMAR", {})
+                        .get(target, {})
+                    )
+
+                    if any(rate > 0 for rate in category_rates.values()):
+                        valid_method = True
+                        break
+
+            if valid_method:
+                break
+
+        if not valid_method:
+            return
+
+        self.app.manager.apply_missingness_pipeline(
+            active_methods=active_methods,
+            mcar_missingness_rate=mcar_missingness_rate,
+            method_columns=method_columns,
+            categorical_column_rates=categorical_column_rates,
+            method_order=method_order,
+            mar_predictor=mar_predictor,
+            base_rates=base_rates,
+            strengths=strengths,
+            rng_seed=rng_seed,
+            always_random_seed=always_random_seed,
+            pipeline_mode=pipeline_mode,
+        )
+
         self.app.manager.save_app_data()
-
 
 
 

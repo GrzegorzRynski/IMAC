@@ -95,6 +95,9 @@ class HistoryView(ctk.CTkFrame):
 
         self.history.register_view_update_callback(self.render_history)
 
+    def change_scroll_parent(self, parent):
+        self.scroll_parent = parent
+
     def rename_branch(self, branch_rename_field, branch_rename_cancel_button,
                       branch_rename_confirm_button,branch_id, branch_name):
         self.hide_rename(branch_rename_field, branch_rename_cancel_button, branch_rename_confirm_button)
