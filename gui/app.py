@@ -5,6 +5,8 @@ import customtkinter as ctk
 
 import imputation_manager
 from gui.components.history_view import HistoryView
+from gui.frames.evaluation_frame import EvaluationView
+from gui.frames.imputation_frame import ImputationView
 from gui.frames.load_data_frame import LoadDataView
 from gui.frames.mini_overview_frame import MiniOverviewView
 from gui.frames.missingness_frame import MissingnessView
@@ -60,10 +62,10 @@ class ImputationApp(ctk.CTk):
         self.btn_missing = ctk.CTkButton(self.sidebar, text="Missingness", font=("Arial", 15, "bold"), command=self.show_missingness_view)
         self.btn_missing.pack(pady=10, fill="x", padx=10)
 
-        self.btn_impute = ctk.CTkButton(self.sidebar, text="Imputation", font=("Arial", 15, "bold"))
+        self.btn_impute = ctk.CTkButton(self.sidebar, text="Imputation", font=("Arial", 15, "bold"), command=self.show_imputation_view)
         self.btn_impute.pack(pady=10, fill="x", padx=10)
 
-        self.btn_evaluate = ctk.CTkButton(self.sidebar, text="Evaluation", font=("Arial", 15, "bold"))
+        self.btn_evaluate = ctk.CTkButton(self.sidebar, text="Evaluation", font=("Arial", 15, "bold"), command=self.show_evaluation_view)
         self.btn_evaluate.pack(pady=10, fill="x", padx=10)
 
         # --- MAIN CONTENT AREA ---
@@ -116,6 +118,20 @@ class ImputationApp(ctk.CTk):
             self.views["missingness"] = MissingnessView(self.main_frame, self)
 
         self.switch_view("missingness")
+        #self.show_mini_overview_view()
+
+    def show_imputation_view(self):
+        if "imputation" not in self.views.keys():
+            self.views["imputation"] = ImputationView(self.main_frame, self)
+
+        self.switch_view("imputation")
+        #self.show_mini_overview_view()
+
+    def show_evaluation_view(self):
+        if "evaluation" not in self.views.keys():
+            self.views["evaluation"] = EvaluationView(self.main_frame, self)
+
+        self.switch_view("evaluation")
         #self.show_mini_overview_view()
 
 if __name__ == "__main__":

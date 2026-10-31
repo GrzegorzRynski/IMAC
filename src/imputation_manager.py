@@ -4,10 +4,12 @@ from json import JSONDecodeError
 from pathlib import Path
 
 import CTkMessagebox
+import numpy as np
 import pandas as pd
 import json
 
 from history_manager import HistoryManager
+from imp_methods.base_imp_methods import impute_mean, impute_mode, impute_median
 from init_analitics.init_analytics import report, missing_summary
 from load_data import load_data_file
 from miss_sims.missingness import (
@@ -36,11 +38,20 @@ class ImputationManager:
 
         self.settings={"missingness" : {}}
 
+        self.imputation_method_registry = {
+            "Mean": self.apply_mean_imputation_action,
+            "Median": self.apply_median_imputation_action,
+            "Mode": self.apply_mode_imputation_action,
+        }
+
         self.action_registry = {
             "load_dataset": self.load_dataset_action,
             "mark_unusual_as_missing": self.mark_unusual_as_missing_action,
             "delete_unusual_rows": self.delete_unusual_rows_action,
-            "apply_missingness_pipeline": self.apply_missingness_pipeline_action
+            "apply_missingness_pipeline": self.apply_missingness_pipeline_action,
+            "apply_mean_imputation": self.apply_mean_imputation_action,
+            "apply_median_imputation": self.apply_median_imputation_action,
+            "apply_mode_imputation": self.apply_mode_imputation_action,
         }
 
     def register_update_callback(self, callback):
@@ -91,7 +102,7 @@ class ImputationManager:
             settings = {}
             current_path = ""
 
-        self.load_missingness_settings(settings.get("missingness", {}))
+        self.load_settings(settings)
 
         if not current_path:
             return
@@ -142,6 +153,7 @@ class ImputationManager:
         self.register_update_callback(self.save_app_data)
 
     def init_settings(self):
+        # --- MISSINGNESS ---
         self.settings.setdefault("missingness", {})
 
         missingness = self.settings["missingness"]
@@ -166,11 +178,42 @@ class ImputationManager:
 
         missingness.setdefault("pipeline_mode", None)
 
-    def load_missingness_settings(self, settings):
-        missingness = self.settings["missingness"]
-        settings = settings or {}
+        # --- IMPUTATION ---
+        self.settings.setdefault("imputation", {})
 
-        method_settings = settings.get("method_settings", {}) or {}
+        imputation = self.settings["imputation"]
+        imputation.setdefault("selected_method", None)
+        imputation.setdefault("selected_columns", None)
+        imputation.setdefault("method_parameters", None)
+
+        # --- EVALUATION ---
+        self.settings.setdefault("evaluation", {})
+
+        evaluation = self.settings["evaluation"]
+
+        evaluation.setdefault("auto_selection", None)
+
+        evaluation.setdefault("single", {})
+        evaluation.setdefault("comparison", {})
+
+        single_settings = evaluation["single"]
+        single_settings.setdefault("branch_id", None)
+        single_settings.setdefault("reference_id", None)
+        single_settings.setdefault("missing_id", None)
+        single_settings.setdefault("result_id", None)
+
+        comparison_settings = evaluation["comparison"]
+        comparison_settings.setdefault("branch_id", None)
+        comparison_settings.setdefault("reference_id", None)
+        comparison_settings.setdefault("missing_id", None)
+        comparison_settings.setdefault("results", None)
+
+    def load_settings(self, settings):
+        # --- MISSINGNESS ---
+        missingness = self.settings["missingness"]
+        missingness_settings = settings.get("missingness") or {}
+
+        method_settings = missingness_settings.get("method_settings", {}) or {}
         target_method_settings = missingness["method_settings"]
 
         target_method_settings["selected_mechanism"] = method_settings.get("selected_mechanism")
@@ -183,14 +226,44 @@ class ImputationManager:
         target_method_settings["categorical_column_rates"] = method_settings.get("categorical_column_rates")
         target_method_settings["method_order"] = method_settings.get("method_order")
 
-        rng_seeds = settings.get("rng_seeds", {}) or {}
+        rng_seeds = missingness_settings.get("rng_seeds", {}) or {}
         target_rng_seeds = missingness["rng_seeds"]
 
         target_rng_seeds["seeds"] = rng_seeds.get("seeds")
         target_rng_seeds["current_rng_seed"] = rng_seeds.get("current_rng_seed")
         target_rng_seeds["always_random_seed"] = rng_seeds.get("always_random_seed")
 
-        missingness["pipeline_mode"] = settings.get("pipeline_mode", "Sequential")
+        missingness["pipeline_mode"] = missingness_settings.get("pipeline_mode", "Sequential")
+
+        # --- IMPUTATION ---
+        imputation = self.settings["imputation"]
+        imputation_settings = settings.get("imputation") or {}
+
+        imputation["selected_method"] = imputation_settings.get("selected_method")
+        imputation["selected_columns"] = imputation_settings.get("selected_columns")
+        imputation["method_parameters"] = imputation_settings.get("method_parameters")
+
+        # --- EVALUATION ---
+        evaluation = self.settings["evaluation"]
+        evaluation_settings = settings.get("evaluation") or {}
+
+        evaluation["auto_selection"] = evaluation_settings.get("auto_selection")
+
+        single_settings = evaluation_settings.get("single", {}) or {}
+        target_single_settings = evaluation["single"]
+
+        target_single_settings["branch_id"] = single_settings.get("branch_id")
+        target_single_settings["reference_id"] = single_settings.get("reference_id")
+        target_single_settings["missing_id"] = single_settings.get("missing_id")
+        target_single_settings["result_id"] = single_settings.get("result_id")
+
+        comparison_settings = evaluation_settings.get("comparison") or {}
+        target_comparison_settings = evaluation["comparison"]
+
+        target_comparison_settings["branch_id"] = comparison_settings.get("branch_id")
+        target_comparison_settings["reference_id"] = comparison_settings.get("reference_id")
+        target_comparison_settings["missing_id"] = comparison_settings.get("missing_id")
+        target_comparison_settings["results"] = comparison_settings.get("results")
 
     def load_remembered_locations(self) -> None:
 
@@ -250,11 +323,10 @@ class ImputationManager:
         if not remembered:
             self.df_history.clear_history()
             self.load_dataset_action()
+            self.notify_change()
 
         if str(df_path) not in self.remembered_locations:
             self.remembered_locations.append(str(df_path))
-
-        self.notify_change()
 
     def mark_unusual_as_missing(self, report, unusual_tokens = None) -> None:
         if unusual_tokens is None:
@@ -382,7 +454,9 @@ class ImputationManager:
                     }
 
         if always_random_seed:
-            rng_seed = None
+            rng_seed = int(
+                np.random.default_rng().integers(0, 2 ** 32)
+            )
 
         result_df = self.apply_missingness_pipeline_action(
             df=df,
@@ -404,23 +478,67 @@ class ImputationManager:
         self.current_df = result_df
         self.notify_change()
 
+    def apply_imputation(self, method, columns, parameters):
+        df = self.current_df
+
+        if df is None:
+            return
+
+        if method not in self.imputation_method_registry.keys():
+            return
+
+        if not all(col in df.columns for col in columns):
+            return
+
+        result_df = self.imputation_method_registry[method](df, columns=columns, **parameters)
+
+        self.current_df = result_df
+        self.notify_change()
+
     # ------------------------- HISTORY LOADING --------------------------------------
 
-    def load_dataset_state(self, branch_id, branch_action_id):
-        new_state: pd.DataFrame = pd.DataFrame()
-
-        for index, action in enumerate(self.df_history.get_history_branch(branch_id)):
-            try:
-                new_state = self.perform_action(new_state, action["action"], action["args"])
-                if index == branch_action_id:
-                    break
-            except ValueError as exc:
-                pass #FILL THIS EXCEPTION TMP
-
+    def load_dataset_state(self, branch_index, branch_action_id):
+        try:
+            new_state = self.get_dataset_state(
+                branch_index,
+                branch_action_id
+            )
+        except ValueError:
+            self.df_history.clear_history()
+            self.load_dataset_action()
+            self.notify_change()
+            return
+        except IndexError:
+            if branch_action_id <= 0:
+                self.df_history.clear_history()
+                self.load_dataset_action()
+                self.notify_change()
+            else:
+                self.load_dataset_state(branch_index, branch_action_id - 1)
+            return
 
         self.current_df = new_state
         self.notify_change()
 
+    def get_dataset_state(self, branch_index, branch_action_index):
+        branch = self.df_history.get_history_branch(branch_index)
+
+        if not 0 <= branch_action_index < len(branch):
+            raise IndexError("Invalid history action index.")
+
+        new_state = pd.DataFrame()
+
+        for index, action in enumerate(branch):
+            new_state = self.perform_action(
+                new_state,
+                action["action"],
+                action["args"]
+            )
+
+            if index == branch_action_index:
+                break
+
+        return new_state
 
     def perform_action(self, current_df_state, action_name, action_args):
         func = self.action_registry[action_name]
@@ -462,7 +580,7 @@ class ImputationManager:
                 action_name="mark_unusual_as_missing",
                 args={
                     "unusual_tokens": unusual_tokens,
-                    "unusual_token_count":unusual_token_count
+                    "unusual_token_count": unusual_token_count
                 },
                 name="Mark Unusual Tokens As Missing",
                 desc=f"{unusual_token_count.sum()} tokens marked"
@@ -538,8 +656,91 @@ class ImputationManager:
                     "mode": mode,
                     "method_order": method_order,
                 },
-                name="Simulate missingness on dataset",
+                name="Simulate Missingness On Dataset",
                 desc=f"Methods: {", ".join(method_order)}\nMode: {mode}\nSeed: {random_state}\nNumber of columns: {colnum}"
+            )
+
+        return result_df
+
+    def apply_mean_imputation_action(self, df: pd.DataFrame, add_history_entry: bool = True, **kwargs) -> pd.DataFrame:
+        columns = kwargs.get("columns", None)
+
+        result_df, imputation_mask, vals = impute_mean(
+            df=df,
+            columns=columns,
+        )
+
+        if add_history_entry:
+            cols = [col+" : "+str(vals[col]) if len(col) <= 15 else str(col[:15]) + "... : "+str(vals[col]) for col in columns]
+            if len(columns) > 5:
+                colnum = "\n".join(cols[:5]) + "..."
+            else:
+                colnum = "\n".join(cols)
+
+            self.df_history.add_action(
+                action_id=4,
+                action_name="apply_mean_imputation",
+                args={
+                    "columns": columns,
+                },
+                name="Mean Imputation",
+                desc=f"Columns: {colnum}\nValues imputed: {imputation_mask.sum().sum()}"
+            )
+
+        return result_df
+
+    def apply_median_imputation_action(self, df: pd.DataFrame, add_history_entry: bool = True,
+                                     **kwargs) -> pd.DataFrame:
+        columns = kwargs.get("columns", None)
+
+        result_df, imputation_mask, vals = impute_median(
+            df=df,
+            columns=columns,
+        )
+
+        if add_history_entry:
+            cols = [col+" : "+str(vals[col]) if len(col) <= 15 else str(col[:15]) + "... : "+str(vals[col]) for col in columns]
+            if len(columns) > 5:
+                colnum = "\n".join(cols[:5]) + "..."
+            else:
+                colnum = "\n".join(cols)
+
+            self.df_history.add_action(
+                action_id=5,
+                action_name="apply_median_imputation",
+                args={
+                    "columns": columns,
+                },
+                name="Median Imputation",
+                desc=f"Columns: {colnum}\nValues imputed: {imputation_mask.sum().sum()}"
+            )
+
+        return result_df
+
+    def apply_mode_imputation_action(self, df: pd.DataFrame, add_history_entry: bool = True,
+                                     **kwargs) -> pd.DataFrame:
+        columns = kwargs.get("columns", None)
+
+        result_df, imputation_mask, vals = impute_mode(
+            df=df,
+            columns=columns,
+        )
+
+        if add_history_entry:
+            cols = [col+" : "+str(vals[col]) if len(col) <= 15 else str(col[:15]) + "... : "+str(vals[col]) for col in columns]
+            if len(columns) > 5:
+                colnum = "\n".join(cols[:5]) + "..."
+            else:
+                colnum = "\n".join(cols)
+
+            self.df_history.add_action(
+                action_id=6,
+                action_name="apply_mode_imputation",
+                args={
+                    "columns": columns,
+                },
+                name="Mode Imputation",
+                desc=f"Columns: {colnum}\nValues imputed: {imputation_mask.sum().sum()}"
             )
 
         return result_df

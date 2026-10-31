@@ -91,6 +91,8 @@ class MissingnessView(ctk.CTkScrollableFrame):
         self.app.manager.register_update_callback(self.on_update)
         self.app.manager.register_save_callback(self.save_settings)
 
+        self.update_view()
+
     def load_settings(self):
         settings = self.app.manager.settings.get("missingness", {})
 
@@ -264,7 +266,7 @@ class MissingnessView(ctk.CTkScrollableFrame):
             if self.current_columns.equals(df.columns):
                 return
 
-            self.current_columns = df.columns
+            self.current_columns = df.columns.copy()
             self.cat_columns = infer_column_types(self.app.manager.current_df)["categorical"]
             self.cat_column_rates = {"MAR": {},
                                      "NMAR": {}}
@@ -638,21 +640,17 @@ class MissingnessView(ctk.CTkScrollableFrame):
     def create_footer(self):
         footer = self.footer_frame
 
-        footer.grid_columnconfigure(0, weight=1)
-
         ctk.CTkButton(
             footer,
-            text="Reset",
-            width=100,
+            text="Reset Settings",
             command=self.reset_settings
-        ).grid(row=0, column=1, padx=5)
+        ).pack(side="left", padx=5)
 
         ctk.CTkButton(
             footer,
             text="Simulate missingness",
-            width=180,
             command=self.simulate_missingness
-        ).grid(row=0, column=2, padx=5)
+        ).pack(side="left", padx=5)
 
     def update_settings_panel(self):
         if self.mar_predictor_var.get() == "":

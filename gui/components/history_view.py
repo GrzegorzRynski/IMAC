@@ -218,7 +218,6 @@ class HistoryView(ctk.CTkFrame):
         self.scroll_parent._parent_canvas.yview_moveto(1.0)
 
     def render_history(self):
-
         branches = self.history.branches
         branch_names = self.history.branch_names
 

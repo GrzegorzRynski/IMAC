@@ -2,6 +2,11 @@ import pandas as pd
 import numpy as np
 
 class HistoryManager:
+    MISSINGNESS_ACTION_IDS = (1, 3)
+
+    IMPUTATION_ACTION_ID_START = 4
+    IMPUTATION_ACTION_ID_END = 99
+
     def __init__(self, imputation_manager):
         self.branches = [[]]
         self.current_branch = 0
@@ -9,15 +14,27 @@ class HistoryManager:
         self.imputation_manager = imputation_manager
 
         self.branch_names = []
+        self.branch_ids = []
+
+        self.on_history_change_callbacks = []
 
     def register_view_update_callback(self, update_callback):
         self.imputation_manager.register_update_callback(update_callback)
+
+    def register_history_update_callback(self, callback):
+        if callback not in self.on_history_change_callbacks:
+            self.on_history_change_callbacks.append(callback)
+
+    def notify_history_change(self):
+        for cb in self.on_history_change_callbacks:
+            cb()
 
     def clear_history(self):
         self.branches = [[]]
         self.current_branch = 0
         self.current_action_index = 0
         self.branch_names = ["Main"]
+        self.branch_ids = [0]
 
     def add_action(self, action_id, action_name, args, name, desc):
         entry = {
@@ -33,45 +50,66 @@ class HistoryManager:
         if len(self.branches[self.current_branch]) > 1:
             self.current_action_index += 1
 
-    def rename_branch(self, branch_id, branch_name):
-        self.branch_names[branch_id] = branch_name
-        self.imputation_manager.save_app_data()
+    def is_missingness_action(self, action_id):
+        return action_id in self.MISSINGNESS_ACTION_IDS
 
-    def swap_branches(self, branch1_id, branch2_id):
-        if self.current_branch == branch1_id:
-            self.current_branch = branch2_id
-        elif self.current_branch == branch2_id:
-            self.current_branch = branch1_id
+    def is_imputation_action(self, action_id):
+        return (
+                self.IMPUTATION_ACTION_ID_START
+                <= action_id
+                <= self.IMPUTATION_ACTION_ID_END
+        )
 
-        self.branches[branch1_id], self.branches[branch2_id] = self.branches[branch2_id], self.branches[branch1_id]
-        self.branch_names[branch1_id], self.branch_names[branch2_id] = self.branch_names[branch2_id], self.branch_names[branch1_id]
+    def rename_branch(self, branch_index, branch_name):
+        self.branch_names[branch_index] = branch_name
         self.imputation_manager.save_app_data()
+        self.notify_history_change()
+
+    def swap_branches(self, branch1_index, branch2_index):
+        if self.current_branch == branch1_index:
+            self.current_branch = branch2_index
+        elif self.current_branch == branch2_index:
+            self.current_branch = branch1_index
+
+        self.branches[branch1_index], self.branches[branch2_index] = self.branches[branch2_index], self.branches[branch1_index]
+        self.branch_names[branch1_index], self.branch_names[branch2_index] = self.branch_names[branch2_index], self.branch_names[branch1_index]
+        self.branch_ids[branch1_index], self.branch_ids[branch2_index] = self.branch_ids[branch2_index], self.branch_ids[branch1_index]
+        self.imputation_manager.save_app_data()
+        self.notify_history_change()
 
     def get_current_history(self):
         return self.get_history_branch(self.current_branch)
 
-    def get_history_branch(self, branch_id):
-        return self.branches[branch_id]
+    def get_history_branch(self, branch_index):
+        if self.branches and len(self.branches) > branch_index:
+            return self.branches[branch_index]
+        return None
 
-    def create_branch_from(self, branch_id, index = -1, name = ""):
+    def create_branch_from(self, branch_index, action_index = -1, name =""):
         """Creates new branch with operations until index."""
-        if index == -1:
-            index = self.current_action_index
-        base_ops = self.branches[branch_id][:index+1]
+        if action_index == -1:
+            action_index = len(self.branches[branch_index]) - 1
+        base_ops = self.branches[branch_index][:action_index + 1]
         if name == "":
-            name = self.branch_names[branch_id]+"_copy"
+            name = self.branch_names[branch_index] + "_copy"
         new_branch = [op.copy() for op in base_ops]
-        self.branches.insert(branch_id+1,new_branch)
-        self.branch_names.insert(branch_id+1,name)
-        self.current_branch = branch_id+1
+        self.branches.insert(branch_index + 1, new_branch)
+        self.branch_names.insert(branch_index + 1, name)
+        self.current_branch = branch_index + 1
+
+        new_branch_id = self.current_branch
+        while new_branch_id in self.branch_ids:
+            new_branch_id += 1
+        self.branch_ids.insert(branch_index + 1, new_branch_id)
+
         self.current_action_index = len(self.branches[self.current_branch]) - 1
         self.select_action(self.current_branch, self.current_action_index, True)
 
-    def select_action(self, branch_id, action_id, force = False):
-        if branch_id == self.current_branch and action_id == self.current_action_index and not force:
+    def select_action(self, branch_index, action_id, force = False):
+        if branch_index == self.current_branch and action_id == self.current_action_index and not force:
             return False
         self.current_action_index = action_id
-        self.current_branch = branch_id
+        self.current_branch = branch_index
         self.imputation_manager.load_dataset_state(self.current_branch, self.current_action_index)
         return True
 
@@ -83,25 +121,36 @@ class HistoryManager:
         self.branches.append([])
 
         self.current_branch = len(self.branches)-1
+
+        new_branch_id = self.current_branch
+        while new_branch_id in self.branch_ids:
+            new_branch_id += 1
+        self.branch_ids.append(new_branch_id)
+
         self.imputation_manager.load_dataset_action()
         self.current_action_index = 0
         self.select_action(self.current_branch, self.current_action_index, True)
 
-    def delete_branch(self, branch_id):
-        if len(self.branches) == 1 and branch_id == self.current_branch:
-            self.branches.clear()
-            self.branch_names.clear()
-            self.current_branch = 0
-            self.current_action_index = 0
-            self.create_new_branch()
-            return
-        if branch_id == self.current_branch and branch_id == len(self.branches)-1:
-            self.current_branch = len(self.branches)-2
-            self.current_action_index = len(self.branches[self.current_branch]) - 1
+    def delete_branch(self, branch_index):
+        del self.branches[branch_index]
+        del self.branch_names[branch_index]
+        del self.branch_ids[branch_index]
 
-        self.branches.remove(self.branches[branch_id])
-        self.branch_names.remove(self.branch_names[branch_id])
-        self.select_action(self.current_branch, self.current_action_index, True)
+        if branch_index == self.current_branch:
+            if len(self.branches) == 1:
+                self.branches.clear()
+                self.branch_names.clear()
+                self.branch_ids.clear()
+                self.current_branch = 0
+                self.current_action_index = 0
+                self.create_new_branch()
+                return
+
+            self.current_branch -= 1
+            self.current_action_index = len(self.branches[self.current_branch]) - 1
+            self.select_action(self.current_branch, self.current_action_index, True)
+        else:
+            self.notify_history_change()
 
     def save_history(self):
 
@@ -146,6 +195,7 @@ class HistoryManager:
         return {
             "branches": serialize_value(self.branches),
             "branch_names": self.branch_names.copy(),
+            "branch_ids": self.branch_ids.copy(),
             "current_branch": self.current_branch,
             "current_action_index": self.current_action_index
         }
@@ -190,6 +240,7 @@ class HistoryManager:
 
         branches = data.get("branches")
         branch_names = data.get("branch_names")
+        branch_ids = data.get("branch_ids")
 
         if not isinstance(branches, list) or not branches:
             raise ValueError("History must contain at least one branch.")
@@ -197,7 +248,13 @@ class HistoryManager:
         if not isinstance(branch_names, list):
             raise ValueError("Invalid branch names.")
 
+        if not isinstance(branch_ids, list):
+            raise ValueError("Invalid branch ids.")
+
         if len(branch_names) != len(branches):
+            raise ValueError("Branch names do not match branches.")
+
+        if len(branch_ids) != len(branches):
             raise ValueError("Branch names do not match branches.")
 
         if not all(isinstance(branch, list) for branch in branches):
@@ -224,6 +281,7 @@ class HistoryManager:
 
         self.branches = restored_branches
         self.branch_names = branch_names.copy()
+        self.branch_ids = branch_ids.copy()
         self.current_branch = current_branch
         self.current_action_index = current_action_index
 
