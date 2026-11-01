@@ -84,10 +84,10 @@ class ImputationManager:
 
         data_file = self.get_user_data_directory() / self.data_file
         self.init_settings()
+        self.load_data_folder()
 
         if not os.path.exists(data_file):
             self.register_update_callback(self.save_app_data)
-            self.load_data_folder()
             self.save_app_data()
 
             return
