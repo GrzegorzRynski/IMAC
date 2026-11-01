@@ -6,8 +6,8 @@ from io import StringIO
 from CTkMessagebox import CTkMessagebox
 
 from gui.components.history_view import HistoryView
-from init_analytics.init_analytics import infer_column_types
-from evaluation.evaluation import (
+from src.init_analytics.init_analytics import infer_column_types
+from src.evaluation.evaluation import (
     imputation_methods_report,
     summarize_comparison_results
 )

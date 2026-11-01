@@ -8,7 +8,7 @@ from tkinter import filedialog
 from CTkListbox import CTkListbox
 import pandas as pd
 
-from load_data import load_data_file
+from src.load_data import load_data_file
 
 
 class LoadDataView(ctk.CTkFrame):

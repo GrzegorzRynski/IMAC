@@ -1,5 +1,4 @@
-import history_manager
-from history_manager import HistoryManager
+from src.history_manager import HistoryManager
 import customtkinter as ctk
 
 class HistoryView(ctk.CTkFrame):
@@ -51,7 +50,7 @@ class HistoryView(ctk.CTkFrame):
     BRANCH_CANCEL_COLOR = "#8F3434"
     BRANCH_CANCEL_HOVER = "#B64242"
 
-    def __init__(self, parent, history: history_manager.HistoryManager, scroll = None):
+    def __init__(self, parent, history: HistoryManager, scroll = None):
         super().__init__(parent)
 
         self.configure(fg_color="transparent")

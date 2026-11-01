@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import ListedColormap
 
-from correlation_functions import cramers_v, correlation_ratio
+from src.correlation_functions import cramers_v, correlation_ratio
 from gui.components.history_view import HistoryView
-from init_analytics.init_analytics import report
+from src.init_analytics.init_analytics import report
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg

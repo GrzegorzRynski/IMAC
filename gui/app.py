@@ -3,8 +3,7 @@ from sys import maxsize
 import CTkMessagebox
 import customtkinter as ctk
 
-import imputation_manager
-from gui.components.history_view import HistoryView
+from src.imputation_manager import ImputationManager
 from gui.frames.evaluation_frame import EvaluationView
 from gui.frames.imputation_frame import ImputationView
 from gui.frames.load_data_frame import LoadDataView
@@ -17,7 +16,7 @@ class ImputationApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.manager = imputation_manager.ImputationManager()
+        self.manager = ImputationManager()
         self.after(10, self.manager.load_app_data)
 
         self.views = {}

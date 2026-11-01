@@ -10,7 +10,6 @@ from src.init_analytics.init_analytics import *
 from src.miss_sims.missingness import *
 import matplotlib.pyplot as plt
 
-DATA_DIR = Path("data")
 
 def main():
     return

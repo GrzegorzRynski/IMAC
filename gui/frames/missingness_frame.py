@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn import pipeline
 
 from gui.components.history_view import HistoryView
-from init_analytics.init_analytics import infer_column_types
+from src.init_analytics.init_analytics import infer_column_types
 
 
 class MissingnessView(ctk.CTkScrollableFrame):

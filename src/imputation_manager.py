@@ -9,11 +9,11 @@ import numpy as np
 import pandas as pd
 import json
 
-from history_manager import HistoryManager
-from imp_methods.base_imp_methods import impute_mean, impute_mode, impute_median
-from init_analytics.init_analytics import report, missing_summary
-from load_data import load_data_file
-from miss_sims.missingness import (
+from src.history_manager import HistoryManager
+from src.imp_methods.base_imp_methods import impute_mean, impute_mode, impute_median
+from src.init_analytics.init_analytics import report, missing_summary
+from src.load_data import load_data_file
+from src.miss_sims.missingness import (
     apply_missingness_pipeline as run_miss_pipeline,
 )
 
@@ -83,6 +83,7 @@ class ImputationManager:
     def load_app_data(self):
 
         data_file = self.get_user_data_directory() / self.data_file
+        self.init_settings()
 
         if not os.path.exists(data_file):
             self.register_update_callback(self.save_app_data)
@@ -105,8 +106,6 @@ class ImputationManager:
         self.data = data
 
         self.load_remembered_locations()
-
-        self.init_settings()
 
         if data is not None:
             settings = self.data.get("settings", {}) or {}
