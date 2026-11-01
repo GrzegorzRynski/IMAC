@@ -1,11 +1,12 @@
 
 import customtkinter as ctk
 import pandas as pd
+from io import StringIO
 
 from CTkMessagebox import CTkMessagebox
 
 from gui.components.history_view import HistoryView
-from init_analitics.init_analytics import infer_column_types
+from init_analytics.init_analytics import infer_column_types
 from evaluation.evaluation import (
     imputation_methods_report,
     summarize_comparison_results
@@ -33,6 +34,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
         self.comparison_branch_id = None
         self.comparison_reference_id = None
         self.comparison_missing_id = None
+        self.comparison_result_id = None
 
         self.comparison_results = {}
         self.comparison_saved_results = {}
@@ -46,6 +48,13 @@ class EvaluationView(ctk.CTkScrollableFrame):
         self.branch_order = list(self.branches.keys())
 
         self.evaluation_results = {}
+
+        self.confusion_matrix_var = ctk.StringVar(value="")
+
+        self.error_message = None
+        self.error_after_id = None
+        self.error_fade_after_id = None
+        self.error_opacity = 1.0
 
         self.load_settings()
 
@@ -71,7 +80,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
             self.no_dataset_frame,
             text="No Dataset Loaded",
             font=("Arial", 22, "bold")
-        ).pack(pady=20)
+        ).pack()
 
         self.create_mode_panel()
 
@@ -95,6 +104,8 @@ class EvaluationView(ctk.CTkScrollableFrame):
             self
         )
 
+        self.restore_evaluation_results()
+
         self.on_mode_changed(self.evaluation_mode.get())
 
         # Register update callback
@@ -112,7 +123,64 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
         self.update_view()
 
-    # ---------------- HISTORY HELPERS ----------------
+    # ---------------- DATA STORAGE ----------------
+
+    def serialize_evaluation_data(self, data):
+        if isinstance(data, pd.DataFrame):
+            return {
+                "__type__": "DataFrame",
+                "data": data.to_json(orient="split")
+            }
+
+        if isinstance(data, dict):
+            return {
+                key: self.serialize_evaluation_data(value)
+                for key, value in data.items()
+            }
+
+        if isinstance(data, list):
+            return [
+                self.serialize_evaluation_data(value)
+                for value in data
+            ]
+
+        if isinstance(data, tuple):
+            return [
+                self.serialize_evaluation_data(value)
+                for value in data
+            ]
+
+        if isinstance(data, pd.Timestamp):
+            return data.isoformat()
+
+        if hasattr(data, "item"):
+            return self.serialize_evaluation_data(data.item())
+
+        if pd.isna(data):
+            return None
+
+        return data
+
+    def deserialize_evaluation_data(self, data):
+        if isinstance(data, dict):
+            if data.get("__type__") == "DataFrame":
+                return pd.read_json(
+                    StringIO(data["data"]),
+                    orient="split"
+                )
+
+            return {
+                key: self.deserialize_evaluation_data(value)
+                for key, value in data.items()
+            }
+
+        if isinstance(data, list):
+            return [
+                self.deserialize_evaluation_data(value)
+                for value in data
+            ]
+
+        return data
 
     def load_settings(self):
         history = self.app.manager.df_history
@@ -124,6 +192,8 @@ class EvaluationView(ctk.CTkScrollableFrame):
         self.auto_selection.set(
             auto_selection if auto_selection is not None else True
         )
+
+        self.evaluation_mode.set(settings.get("evaluation_mode", "Single") or "Single")
 
         current_branch_id = (
             history.branch_ids[history.current_branch]
@@ -170,16 +240,34 @@ class EvaluationView(ctk.CTkScrollableFrame):
         if self.comparison_missing_id is None:
             self.comparison_missing_id = history.current_action_index
 
+        self.comparison_result_id = comparison.get("result_id")
+        if self.comparison_result_id is None:
+            branch_index = self.get_branch_index(self.comparison_branch_id)
+
+            if branch_index is not None:
+                branch = history.get_history_branch(branch_index)
+                self.comparison_result_id = len(branch) - 1 if branch else None
+
         self.comparison_saved_results = {
             int(branch_id): action_index
             for branch_id, action_index
             in (comparison.get("results") or {}).items()
         }
 
+        # --- EVALUATION RESULTS ---
+
+        saved_results = settings.get("saved_results", {}) or {}
+
+        self.evaluation_results = self.deserialize_evaluation_data(
+            saved_results
+        )
+
     def save_settings(self):
         settings = self.app.manager.settings["evaluation"]
 
         settings["auto_selection"] = self.auto_selection.get()
+
+        settings["evaluation_mode"] = self.evaluation_mode.get()
 
         # --- SINGLE ---
         single = settings["single"]
@@ -195,11 +283,18 @@ class EvaluationView(ctk.CTkScrollableFrame):
         comparison["branch_id"] = self.comparison_branch_id
         comparison["reference_id"] = self.comparison_reference_id
         comparison["missing_id"] = self.comparison_missing_id
+        comparison["result_id"] = self.comparison_result_id
 
         comparison["results"] = {
             str(branch_id): result["action_index"]
             for branch_id, result in self.comparison_results.items()
         }
+
+        # --- EVALUATION RESULTS ---
+
+        settings["saved_results"] = self.serialize_evaluation_data(
+            self.evaluation_results
+        )
 
     def get_history_data(self):
         history = self.app.manager.df_history
@@ -322,6 +417,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
         self.comparison_reference_id = suggestion["reference"]
         self.comparison_missing_id = suggestion["missing"]
+        self.comparison_result_id = suggestion["result"]
 
         self.set_action_combobox(
             self.comparison_reference_combobox,
@@ -333,6 +429,12 @@ class EvaluationView(ctk.CTkScrollableFrame):
             self.comparison_missing_combobox,
             self.comparison_action_choices,
             self.comparison_missing_id
+        )
+
+        self.set_action_combobox(
+            self.comparison_result_combobox,
+            self.comparison_action_choices,
+            self.comparison_result_id
         )
 
         self.update_comparison_selection_widgets()
@@ -403,12 +505,30 @@ class EvaluationView(ctk.CTkScrollableFrame):
             font=("Arial", 18, "bold")
         ).pack(anchor="w", padx=15, pady=(10, 5))
 
-        ctk.CTkCheckBox(
+        self.single_auto_selection_frame = ctk.CTkFrame(
             panel,
+            fg_color="transparent"
+        )
+        self.single_auto_selection_frame.pack(
+            fill="x",
+            padx=15,
+            pady=(5, 10)
+        )
+
+        ctk.CTkCheckBox(
+            self.single_auto_selection_frame,
             text="Auto Selection",
             variable=self.auto_selection,
             command=self.on_auto_selection_changed
-        ).pack(anchor="w", padx=15, pady=(5, 10))
+        ).pack(side="left")
+
+        self.single_error_label = ctk.CTkLabel(
+            self.single_auto_selection_frame,
+            text="",
+            text_color="#E05B5B"
+        )
+
+        self.single_error_label.pack(side="left", padx=(10, 0))
 
         ctk.CTkLabel(
             panel,
@@ -516,12 +636,30 @@ class EvaluationView(ctk.CTkScrollableFrame):
             font=("Arial", 18, "bold")
         ).pack(anchor="w", padx=15, pady=(10, 5))
 
-        ctk.CTkCheckBox(
+        self.comparison_auto_selection_frame = ctk.CTkFrame(
             panel,
+            fg_color="transparent"
+        )
+        self.comparison_auto_selection_frame.pack(
+            fill="x",
+            padx=15,
+            pady=(5, 10)
+        )
+
+        ctk.CTkCheckBox(
+            self.comparison_auto_selection_frame,
             text="Auto Selection",
             variable=self.auto_selection,
             command=self.on_auto_selection_changed
-        ).pack(anchor="w", padx=15, pady=(5, 10))
+        ).pack(side="left")
+
+        self.comparison_error_label = ctk.CTkLabel(
+            self.comparison_auto_selection_frame,
+            text="",
+            text_color="#E05B5B"
+        )
+
+        self.comparison_error_label.pack(side="left", padx=(10, 0))
 
         # Main Branch
         ctk.CTkLabel(
@@ -590,6 +728,24 @@ class EvaluationView(ctk.CTkScrollableFrame):
             fill="x", padx=15, pady=(5, 15)
         )
 
+        # Main Branch Result
+        ctk.CTkLabel(
+            panel,
+            text="Main Branch Result"
+        ).pack(anchor="w", padx=15)
+
+        self.comparison_result_combobox = ctk.CTkComboBox(
+            panel,
+            state="readonly",
+            values=[],
+            command=self.on_result_changed
+        )
+        self.comparison_result_combobox.pack(
+            fill="x",
+            padx=15,
+            pady=(5, 15)
+        )
+
         # Results section
         ctk.CTkLabel(
             panel,
@@ -655,6 +811,16 @@ class EvaluationView(ctk.CTkScrollableFrame):
                 auto_suggest=False
             )
 
+    def restore_evaluation_results(self):
+        single_results = self.evaluation_results.get("Single")
+        comparison_results = self.evaluation_results.get("Comparison")
+
+        if single_results is not None:
+            self.display_single_results(single_results)
+
+        if comparison_results is not None:
+            self.display_comparison_results(comparison_results)
+
     def create_actions_panel(self):
         self.actions_panel = ctk.CTkFrame(
             self.content_frame,
@@ -671,16 +837,30 @@ class EvaluationView(ctk.CTkScrollableFrame):
             command=self.on_evaluation
         ).pack()
 
-        # Evaluation results container
+        # Evaluation results containers
         self.evaluation_result_frame = ctk.CTkFrame(
             self.content_frame,
+            fg_color="transparent",
+        )
+
+        self.single_evaluation_result_frame = ctk.CTkFrame(
+            self.evaluation_result_frame,
             fg_color=("gray90", "gray17"),
             corner_radius=12
         )
 
-    def create_result_section(self, title):
-        section = ctk.CTkFrame(
+        self.comparison_evaluation_result_frame = ctk.CTkFrame(
             self.evaluation_result_frame,
+            fg_color=("gray90", "gray17"),
+            corner_radius=12
+        )
+
+    def create_result_section(self, title, parent=None):
+        if parent is None:
+            parent = self.single_evaluation_result_frame
+
+        section = ctk.CTkFrame(
+            parent,
             fg_color=("gray85", "gray20"),
             corner_radius=10
         )
@@ -704,11 +884,266 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
         return section
 
-    def clear_evaluation_result_frame(self):
-        for widget in self.evaluation_result_frame.winfo_children():
+    def create_confusion_matrix_section(self, confusion_matrices):
+        section = self.create_result_section("Confusion Matrix")
+
+        if not confusion_matrices:
+            ctk.CTkLabel(
+                section,
+                text="No confusion matrices available.",
+                text_color=("gray40", "gray70")
+            ).pack(
+                anchor="w",
+                padx=15,
+                pady=(0, 15)
+            )
+            return
+
+        self.confusion_matrices = confusion_matrices
+
+        columns = list(confusion_matrices.keys())
+
+        if self.confusion_matrix_var.get() not in columns:
+            self.confusion_matrix_var.set(columns[0])
+
+        self.confusion_matrix_combo = ctk.CTkComboBox(
+            section,
+            values=columns,
+            variable=self.confusion_matrix_var,
+            command=self.update_confusion_matrix
+        )
+
+        self.confusion_matrix_combo.pack(
+            anchor="w",
+            padx=15,
+            pady=(0, 10)
+        )
+
+        self.confusion_matrix_container = ctk.CTkFrame(
+            section,
+            fg_color="transparent"
+        )
+
+        self.confusion_matrix_container.pack(
+            fill="both",
+            expand=True,
+            padx=15,
+            pady=(0, 15)
+        )
+
+        self.confusion_matrix_canvas = ctk.CTkCanvas(
+            self.confusion_matrix_container,
+            height=300,
+            highlightthickness=0,
+            bg="#2b2b2b",
+            borderwidth=0
+        )
+
+        self.confusion_matrix_canvas.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+
+        horizontal_scrollbar = ctk.CTkScrollbar(
+            self.confusion_matrix_container,
+            orientation="horizontal",
+            command=self.confusion_matrix_canvas.xview
+        )
+
+        horizontal_scrollbar.grid(
+            row=1,
+            column=0,
+            sticky="ew"
+        )
+
+        self.confusion_matrix_container.grid_rowconfigure(
+            0,
+            weight=0
+        )
+
+        self.confusion_matrix_container.grid_columnconfigure(
+            0,
+            weight=1
+        )
+
+        self.confusion_matrix_canvas.configure(
+            xscrollcommand=horizontal_scrollbar.set
+        )
+
+        self.confusion_matrix_frame = ctk.CTkFrame(
+            self.confusion_matrix_canvas,
+            fg_color="transparent"
+        )
+
+        self.confusion_matrix_canvas.bind(
+            "<MouseWheel>",
+            self.on_confusion_matrix_mousewheel
+        )
+
+        self.confusion_matrix_frame.bind(
+            "<MouseWheel>",
+            self.on_confusion_matrix_mousewheel
+        )
+
+        self.confusion_matrix_window = (
+            self.confusion_matrix_canvas.create_window(
+                (0, 0),
+                window=self.confusion_matrix_frame,
+                anchor="nw"
+            )
+        )
+
+        self.update_confusion_matrix(self.confusion_matrix_var.get())
+
+    def on_confusion_matrix_mousewheel(self, event):
+        self.confusion_matrix_canvas.xview_scroll(
+            int((event.delta / 120)),
+            "units"
+        )
+        return "break"
+
+    def update_confusion_matrix(self, selected_column):
+        frame = self.confusion_matrix_frame
+        canvas = self.confusion_matrix_canvas
+
+        for widget in frame.winfo_children():
             widget.destroy()
 
-        self.evaluation_result_frame.pack_forget()
+        matrix = self.confusion_matrices[selected_column]
+
+        labels = [str(value) for value in matrix.columns]
+        row_labels = [str(value) for value in matrix.index]
+
+        # Reset column configuration
+        for column in range(len(labels) + 1):
+            frame.grid_columnconfigure(
+                column,
+                weight=0,
+                uniform=""
+            )
+
+        # Fixed column width
+        cell_width = 100
+        label_width = 150
+
+        for column in range(len(labels) + 1):
+            frame.grid_columnconfigure(
+                column,
+                minsize=cell_width,
+                weight=0,
+                uniform=""
+            )
+
+        frame.grid_columnconfigure(
+            0,
+            minsize=label_width,
+            weight=0,
+            uniform=""
+        )
+
+        # Header
+        ctk.CTkLabel(
+            frame,
+            text="Actual / Predicted",
+            font=("Arial", 12, "bold"),
+            anchor="center",
+            width=label_width
+        ).grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=2,
+            pady=2
+        )
+
+        for column, label in enumerate(labels, start=1):
+            ctk.CTkLabel(
+                frame,
+                text=label,
+                font=("Arial", 12, "bold"),
+                anchor="center",
+                width=cell_width
+            ).grid(
+                row=0,
+                column=column,
+                sticky="nsew",
+                padx=2,
+                pady=2
+            )
+
+        # Matrix values
+        for row, row_label in enumerate(row_labels, start=1):
+            ctk.CTkLabel(
+                frame,
+                text=row_label,
+                font=("Arial", 12, "bold"),
+                anchor="center",
+                width=cell_width
+            ).grid(
+                row=row,
+                column=0,
+                sticky="nsew",
+                padx=2,
+                pady=2
+            )
+
+            for column, value in enumerate(
+                    matrix.iloc[row - 1],
+                    start=1
+            ):
+                is_diagonal = row - 1 == column - 1
+
+                ctk.CTkLabel(
+                    frame,
+                    text=str(value),
+                    anchor="center",
+                    width=cell_width,
+                    fg_color=(
+                        ("#DCEFE0", "#244B35")
+                        if is_diagonal
+                        else "transparent"
+                    ),
+                    corner_radius=4
+                ).grid(
+                    row=row,
+                    column=column,
+                    sticky="nsew",
+                    padx=2,
+                    pady=2
+                )
+
+        for widget in self.confusion_matrix_frame.winfo_children():
+            widget.bind(
+                "<MouseWheel>",
+                self.on_confusion_matrix_mousewheel
+            )
+
+        # Update table dimensions
+        frame.update_idletasks()
+
+        table_width = frame.winfo_reqwidth()
+        table_height = frame.winfo_reqheight()
+
+        canvas.configure(
+            width=min(table_width, self.confusion_matrix_container.winfo_width()),
+            height=table_height,
+            scrollregion=(0, 0, table_width, table_height)
+        )
+
+        canvas.xview_moveto(0)
+
+    def clear_single_evaluation_result_frame(self):
+        for widget in self.single_evaluation_result_frame.winfo_children():
+            widget.destroy()
+
+        self.single_evaluation_result_frame.pack_forget()
+
+    def clear_comparison_evaluation_result_frame(self):
+        for widget in self.comparison_evaluation_result_frame.winfo_children():
+            widget.destroy()
+
+        self.comparison_evaluation_result_frame.pack_forget()
 
     def create_result_table(self, parent, headers, rows):
         table = ctk.CTkFrame(
@@ -717,17 +1152,6 @@ class EvaluationView(ctk.CTkScrollableFrame):
             corner_radius=8
         )
         table.pack(fill="x", padx=12, pady=(0, 12))
-
-        column_count = len(headers)
-
-        table.grid_columnconfigure(0, weight=2, uniform="table_columns")
-
-        for column in range(1, column_count):
-            table.grid_columnconfigure(
-                column,
-                weight=1,
-                uniform="table_columns"
-            )
 
         header_frame = ctk.CTkFrame(
             table,
@@ -752,7 +1176,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
             header_frame.grid_columnconfigure(
                 column,
-                weight=2 if column == 0 else 1,
+                weight=3 if column == 0 else 2,
                 uniform="table_columns"
             )
 
@@ -784,25 +1208,19 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
                 row_frame.grid_columnconfigure(
                     column_index,
-                    weight=2 if column_index == 0 else 1,
+                    weight=3 if column_index == 0 else 2,
                     uniform="table_columns"
                 )
 
     def display_single_results(self, results):
-        self.clear_evaluation_result_frame()
+        self.clear_single_evaluation_result_frame()
 
         report = results["report"]
         coverage = report["coverage"]
 
-        self.evaluation_result_frame.pack(
-            fill="x",
-            padx=10,
-            pady=(5, 20)
-        )
-
         # Main title
         ctk.CTkLabel(
-            self.evaluation_result_frame,
+            self.single_evaluation_result_frame,
             text="Evaluation Results",
             font=("Arial", 22, "bold")
         ).pack(
@@ -811,11 +1229,24 @@ class EvaluationView(ctk.CTkScrollableFrame):
             pady=(18, 5)
         )
 
+        # Method
         ctk.CTkLabel(
-            self.evaluation_result_frame,
+            self.single_evaluation_result_frame,
             text=f"Method: {results['method_name']}",
             font=("Arial", 14),
             text_color=("gray35", "gray75")
+        ).pack(
+            anchor="w",
+            padx=20,
+            pady=(0, 2)
+        )
+
+        # Evaluation note
+        ctk.CTkLabel(
+            self.single_evaluation_result_frame,
+            text="ⓘ Text columns are excluded from evaluation.",
+            font=("Arial", 12),
+            text_color=("gray50", "gray65")
         ).pack(
             anchor="w",
             padx=20,
@@ -907,6 +1338,119 @@ class EvaluationView(ctk.CTkScrollableFrame):
             self.create_result_table(
                 categorical_section,
                 ["Column", "Accuracy", "Macro F1"],
+                categorical_rows
+            )
+        else:
+            ctk.CTkLabel(
+                categorical_section,
+                text="No categorical columns to evaluate.",
+                text_color=("gray40", "gray70")
+            ).pack(
+                anchor="w",
+                padx=15,
+                pady=(0, 15)
+            )
+
+        self.create_confusion_matrix_section(
+            report["confusion_matrices"]
+        )
+
+    def display_comparison_results(self, results):
+        self.clear_comparison_evaluation_result_frame()
+
+        summary = results["summary"]
+
+        # Main title
+        ctk.CTkLabel(
+            self.comparison_evaluation_result_frame,
+            text="Comparison Results",
+            font=("Arial", 22, "bold")
+        ).pack(
+            anchor="w",
+            padx=20,
+            pady=(18, 12)
+        )
+
+        # Compared methods
+        methods_section = self.create_result_section(
+            "Compared Methods",
+            parent=self.comparison_evaluation_result_frame
+        )
+
+        for method_name in results["methods"]:
+            ctk.CTkLabel(
+                methods_section,
+                text=f"• {method_name}",
+                font=("Arial", 13),
+                anchor="w"
+            ).pack(
+                anchor="w",
+                padx=15,
+                pady=3
+            )
+
+        # Numeric evaluation
+        numeric_section = self.create_result_section(
+            "Numeric Evaluation",
+            parent=self.comparison_evaluation_result_frame
+        )
+
+        numeric_df = summary["numeric"]
+
+        if not numeric_df.empty:
+            numeric_rows = [
+                [
+                    row["method"],
+                    row["column"],
+                    f"{row['MAE']:.4f}",
+                    f"{row['RMSE']:.4f}",
+                    (
+                        f"{row['NRMSE']:.4f}"
+                        if pd.notna(row["NRMSE"])
+                        else "N/A"
+                    )
+                ]
+                for _, row in numeric_df.iterrows()
+            ]
+
+            self.create_result_table(
+                numeric_section,
+                ["Method", "Column", "MAE", "RMSE", "NRMSE"],
+                numeric_rows
+            )
+        else:
+            ctk.CTkLabel(
+                numeric_section,
+                text="No numeric columns to evaluate.",
+                text_color=("gray40", "gray70")
+            ).pack(
+                anchor="w",
+                padx=15,
+                pady=(0, 15)
+            )
+
+        # Categorical evaluation
+        categorical_section = self.create_result_section(
+            "Categorical Evaluation",
+            parent=self.comparison_evaluation_result_frame
+        )
+
+        categorical_df = summary["categorical"]
+
+        if not categorical_df.empty:
+            categorical_rows = [
+                [
+                    row["method"],
+                    row["column"],
+                    f"{row['Accuracy']:.4f}",
+                    f"{row['MacroF1']:.4f}"
+                ]
+                for _, row in categorical_df.iterrows()
+            ]
+
+            self.create_result_table(
+                categorical_section,
+                ["Method", "Column", "Accuracy", "Macro F1"],
                 categorical_rows
             )
         else:
@@ -1023,6 +1567,85 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
         self.update_comparison_result_available_branches()
 
+    def show_error_message(self, message):
+        self.clear_error_message()
+
+        if self.evaluation_mode.get() == "Single":
+            auto_selection_frame = self.single_auto_selection_frame
+        else:
+            auto_selection_frame = self.comparison_auto_selection_frame
+
+        self.error_opacity = 1.0
+
+        if self.evaluation_mode.get() == "Single":
+            self.error_message = self.single_error_label
+        else:
+            self.error_message = self.comparison_error_label
+
+        self.error_message.configure(
+            text=message,
+            text_color="#E05B5B",
+            font=("Arial", 12),
+            wraplength=500
+        )
+
+        self.error_after_id = self.after(
+            5000,
+            self.fade_error_message
+        )
+
+    def fade_error_message(self):
+        if self.error_message is None:
+            return
+
+        self.error_opacity -= 0.2
+
+        if self.error_opacity <= 0:
+            self.clear_error_message()
+            return
+
+        background = "#2B2B2B"
+
+        self.error_message.configure(
+            text_color=self.blend_colors(
+                "#E05B5B",
+                background,
+                self.error_opacity
+            )
+        )
+
+        self.error_fade_after_id = self.after(
+            50,
+            self.fade_error_message
+        )
+
+    def blend_colors(self, foreground, background, opacity):
+        foreground = foreground.lstrip("#")
+        background = background.lstrip("#")
+
+        result = []
+
+        for i in range(0, 6, 2):
+            fg = int(foreground[i:i + 2], 16)
+            bg = int(background[i:i + 2], 16)
+
+            value = int(bg + (fg - bg) * opacity)
+            result.append(f"{value:02X}")
+
+        return "#" + "".join(result)
+
+    def clear_error_message(self):
+        if self.error_after_id is not None:
+            self.after_cancel(self.error_after_id)
+            self.error_after_id = None
+
+        if self.error_fade_after_id is not None:
+            self.after_cancel(self.error_fade_after_id)
+            self.error_fade_after_id = None
+
+        if self.error_message:
+            self.error_message.configure(text="")
+
     def on_comparison_result_changed(self, branch_id, action_index):
         self.comparison_results[branch_id]["action_index"] = action_index
 
@@ -1110,6 +1733,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
         self.comparison_reference_combobox.configure(values=values)
         self.comparison_missing_combobox.configure(values=values)
+        self.comparison_result_combobox.configure(values=values)
 
         if self.comparison_reference_combobox.get() not in self.comparison_action_choices:
             self.comparison_reference_combobox.set("")
@@ -1118,6 +1742,10 @@ class EvaluationView(ctk.CTkScrollableFrame):
         if self.comparison_missing_combobox.get() not in self.comparison_action_choices:
             self.comparison_missing_combobox.set("")
             self.comparison_missing_id = None
+
+        if self.comparison_result_combobox.get() not in self.comparison_action_choices:
+            self.comparison_result_combobox.set("")
+            self.comparison_result_id = None
 
     def update_single_selection_widgets(self):
         branch_id = self.single_branch_id
@@ -1204,6 +1832,8 @@ class EvaluationView(ctk.CTkScrollableFrame):
     def on_branch_changed(self, branch_id):
         if self.evaluation_mode.get() == "Single":
             if self.single_branch_id == branch_id:
+                if self.auto_selection.get():
+                    self.auto_select_single()
                 return
             self.single_branch_id = branch_id
             self.update_single_selection_widgets()
@@ -1213,6 +1843,8 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
         else:
             if self.comparison_branch_id == branch_id:
+                if self.auto_selection.get():
+                    self.auto_select_comparison()
                 return
             self.comparison_branch_id = branch_id
 
@@ -1238,18 +1870,40 @@ class EvaluationView(ctk.CTkScrollableFrame):
     def on_result_changed(self, value):
         if self.evaluation_mode.get() == "Single":
             self.single_result_id = value
+        else:
+            self.comparison_result_id = value
 
     def on_mode_changed(self, mode):
         self.single_frame.pack_forget()
         self.comparison_frame.pack_forget()
         self.actions_panel.pack_forget()
 
+        self.single_evaluation_result_frame.pack_forget()
+        self.comparison_evaluation_result_frame.pack_forget()
+        self.evaluation_result_frame.pack_forget()
+
         if mode == "Single":
             self.single_frame.pack(fill="both", expand=True)
+            result_key = "Single"
+            result_frame = self.single_evaluation_result_frame
         else:
             self.comparison_frame.pack(fill="both", expand=True)
+            result_key = "Comparison"
+            result_frame = self.comparison_evaluation_result_frame
 
         self.actions_panel.pack(pady=20)
+
+        if self.evaluation_results.get(result_key) is not None:
+            self.evaluation_result_frame.pack(
+                expand=True,
+                fill="x"
+            )
+
+            result_frame.pack(
+                fill="x",
+                padx=10,
+                pady=(5, 20)
+            )
 
     # ---------------- EVALUATION ----------------
 
@@ -1271,8 +1925,11 @@ class EvaluationView(ctk.CTkScrollableFrame):
                 raise ValueError("Add at least one imputation result.")
 
             result_ids = [
-                result["action_index"]
-                for result in self.comparison_results.values()
+                self.comparison_result_id,
+                *[
+                    result["action_index"]
+                    for result in self.comparison_results.values()
+                ]
             ]
 
         if branch_id is None or branch_id not in self.actions:
@@ -1287,6 +1944,9 @@ class EvaluationView(ctk.CTkScrollableFrame):
             )
 
         main_actions = self.actions[branch_id]
+
+        if reference_id not in main_actions:
+            raise ValueError("Invalid reference dataset selection.")
 
         if missing_id not in main_actions:
             raise ValueError("Invalid missing dataset selection.")
@@ -1306,7 +1966,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
 
         if self.evaluation_mode.get() == "Single":
             if result_ids[0] is None:
-                raise ValueError("Selected result dataset.")
+                raise ValueError("Select result dataset.")
 
             result_action = main_actions[result_ids[0]]
 
@@ -1316,6 +1976,16 @@ class EvaluationView(ctk.CTkScrollableFrame):
                 )
 
         else:
+            if self.comparison_result_id is None:
+                raise ValueError("Select an imputation result for the main branch.")
+
+            result_action = main_actions[self.comparison_result_id]
+
+            if not history.is_imputation_action(result_action["action_id"]):
+                raise ValueError(
+                    "Selected main branch result is not an imputation action."
+                )
+
             if all([
                 result["action_index"] is None
                 for result in self.comparison_results.values()
@@ -1398,13 +2068,20 @@ class EvaluationView(ctk.CTkScrollableFrame):
             missing_id = self.comparison_missing_id
 
             result_states = {
+                self.branches[branch_id]: (
+                    branch_id,
+                    self.comparison_result_id
+                )
+            }
+
+            result_states.update({
                 self.branches[result_branch_id]: (
                     result_branch_id,
                     result["action_index"]
                 )
                 for result_branch_id, result
                 in self.comparison_results.items()
-            }
+            })
 
             valid_result_states = {
                 key: value for key, value in result_states.items()
@@ -1486,9 +2163,13 @@ class EvaluationView(ctk.CTkScrollableFrame):
                 df_missing=data["missing"],
                 imputed_datasets=data["results"],
                 numeric_columns=numeric_columns,
-                categorical_columns=categorical_columns
+                categorical_columns=categorical_columns,
+                determine_confusion_matrices=(
+                        self.evaluation_mode.get() == "Single"
+                )
             )
         except ValueError as e:
+            self.show_error_message(str(e))
             return None
 
         if self.evaluation_mode.get() == "Single":
@@ -1515,11 +2196,36 @@ class EvaluationView(ctk.CTkScrollableFrame):
         if result is None:
             return
 
+        self.clear_error_message()
+
+        self.evaluation_result_frame.pack_forget()
+        self.evaluation_result_frame.pack(
+            expand=True,
+            fill="x",
+        )
+
         if self.evaluation_mode.get() == "Single":
             self.evaluation_results["Single"] = result
 
-            self.clear_evaluation_result_frame()
             self.display_single_results(result)
+            self.comparison_evaluation_result_frame.pack_forget()
+            self.single_evaluation_result_frame.pack(
+                fill="x",
+                padx=10,
+                pady=(5, 20),
+            )
+        else:
+            self.evaluation_results["Comparison"] = result
+
+            self.display_comparison_results(result)
+            self.single_evaluation_result_frame.pack_forget()
+            self.comparison_evaluation_result_frame.pack(
+                fill="x",
+                padx=10,
+                pady=(5, 20),
+            )
+
+        self.app.manager.save_app_data()
 
     # ---------------- UPDATE ----------------
 
@@ -1536,7 +2242,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
             if df is None:
                 self.content_frame.pack_forget()
                 self.history.pack_forget()
-                self.no_dataset_frame.pack(pady=20)
+                self.no_dataset_frame.pack(pady=10)
                 return
 
             self.no_dataset_frame.pack_forget()
@@ -1547,7 +2253,7 @@ class EvaluationView(ctk.CTkScrollableFrame):
                 pady=10
             )
 
-            self.history.pack(fill="both", expand=True)
+            self.history.pack_history()
             self.history.render_history()
 
             self.on_mode_changed(self.evaluation_mode.get())

@@ -13,8 +13,8 @@ class HistoryManager:
         self.current_action_index = 0
         self.imputation_manager = imputation_manager
 
-        self.branch_names = []
-        self.branch_ids = []
+        self.branch_names = ["Main"]
+        self.branch_ids = [0]
 
         self.on_history_change_callbacks = []
 

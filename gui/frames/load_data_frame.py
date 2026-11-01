@@ -121,6 +121,8 @@ class LoadDataView(ctk.CTkFrame):
 
         selected = self.known_list.get()
 
+        remembered_locations = list(self.app.manager.remembered_locations)
+
         if not selected or selected == "No known files yet.":
             return
 
@@ -139,8 +141,8 @@ class LoadDataView(ctk.CTkFrame):
                 icon="cancel"
             )
 
-            if str(Path(path)) in self.app.manager.remembered_locations:
-                self.app.manager.remembered_locations.remove(str(Path(path)))
+            if str(Path(path)) in remembered_locations:
+                remembered_locations.remove(str(Path(path)))
             self.app.manager.save_app_data()
             self.show_current_info()
             self.update_known_list()
@@ -154,8 +156,8 @@ class LoadDataView(ctk.CTkFrame):
                 icon="cancel"
             )
 
-            if str(Path(path)) in self.app.manager.remembered_locations:
-                self.app.manager.remembered_locations.remove(str(Path(path)))
+            if str(Path(path)) in remembered_locations:
+                remembered_locations.remove(str(Path(path)))
             self.app.manager.save_app_data()
             self.show_current_info()
             self.update_known_list()
@@ -201,17 +203,19 @@ class LoadDataView(ctk.CTkFrame):
             self.current_info_column_display.grid_remove()
 
             self.current_info_name_label.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=5)
-            self.current_info_name_label.configure(text="No Dataset Selected")
+            self.current_info_name_label.configure(text="No Dataset Loaded")
 
     def update_known_list(self):
 
         self.known_list.delete(0, "end")
 
-        if not self.app.manager.remembered_locations:
+        remembered_locations = list(self.app.manager.remembered_locations)
+
+        if not remembered_locations:
             self.known_list.insert("end", "No recent files yet.")
             return
 
-        for path in self.app.manager.remembered_locations:
+        for path in remembered_locations:
             filename = os.path.basename(path)
             display_text = f"{filename} – {path}"
             self.known_list.insert("end", display_text)

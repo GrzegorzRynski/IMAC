@@ -2,6 +2,7 @@ import os
 import tkinter
 from json import JSONDecodeError
 from pathlib import Path
+import sys
 
 import CTkMessagebox
 import numpy as np
@@ -10,7 +11,7 @@ import json
 
 from history_manager import HistoryManager
 from imp_methods.base_imp_methods import impute_mean, impute_mode, impute_median
-from init_analitics.init_analytics import report, missing_summary
+from init_analytics.init_analytics import report, missing_summary
 from load_data import load_data_file
 from miss_sims.missingness import (
     apply_missingness_pipeline as run_miss_pipeline,
@@ -19,9 +20,18 @@ from miss_sims.missingness import (
 
 class ImputationManager:
 
+    @staticmethod
+    def get_user_data_directory():
+        app_data = Path(os.getenv("APPDATA"))
+
+        directory = app_data / "IMAC"
+        directory.mkdir(parents=True, exist_ok=True)
+
+        return directory
+
     def __init__(self):
 
-        self.remembered_locations = []
+        self.remembered_locations = set()
         self.current_df = None
         self.original_df = None
         self.current_name = ""
@@ -72,10 +82,13 @@ class ImputationManager:
 
     def load_app_data(self):
 
-        main_folder = Path(__file__).resolve().parent.parent
-        data_file = main_folder / self.data_file
+        data_file = self.get_user_data_directory() / self.data_file
 
         if not os.path.exists(data_file):
+            self.register_update_callback(self.save_app_data)
+            self.load_data_folder()
+            self.save_app_data()
+
             return
 
         try:
@@ -105,6 +118,9 @@ class ImputationManager:
         self.load_settings(settings)
 
         if not current_path:
+            self.register_update_callback(self.save_app_data)
+            self.save_app_data()
+
             return
 
         try:
@@ -193,6 +209,8 @@ class ImputationManager:
 
         evaluation.setdefault("auto_selection", None)
 
+        evaluation.setdefault("evaluation_mode", None)
+
         evaluation.setdefault("single", {})
         evaluation.setdefault("comparison", {})
 
@@ -206,7 +224,10 @@ class ImputationManager:
         comparison_settings.setdefault("branch_id", None)
         comparison_settings.setdefault("reference_id", None)
         comparison_settings.setdefault("missing_id", None)
+        comparison_settings.setdefault("result_id", None)
         comparison_settings.setdefault("results", None)
+
+        evaluation.setdefault("saved_results", None)
 
     def load_settings(self, settings):
         # --- MISSINGNESS ---
@@ -249,6 +270,8 @@ class ImputationManager:
 
         evaluation["auto_selection"] = evaluation_settings.get("auto_selection")
 
+        evaluation["evaluation_mode"] = evaluation_settings.get("evaluation_mode")
+
         single_settings = evaluation_settings.get("single", {}) or {}
         target_single_settings = evaluation["single"]
 
@@ -263,34 +286,34 @@ class ImputationManager:
         target_comparison_settings["branch_id"] = comparison_settings.get("branch_id")
         target_comparison_settings["reference_id"] = comparison_settings.get("reference_id")
         target_comparison_settings["missing_id"] = comparison_settings.get("missing_id")
+        target_comparison_settings["result_id"] = comparison_settings.get("result_id")
         target_comparison_settings["results"] = comparison_settings.get("results")
 
-    def load_remembered_locations(self) -> None:
+        evaluation["saved_results"] = evaluation_settings.get("saved_results")
 
-        self.remembered_locations = []
+    def load_remembered_locations(self) -> None:
 
         self.load_data_folder()
 
         if self.data is None:
             return
 
-        remembered_locations = self.data.get("recent_files", [])
+        remembered_locations = self.data.get("recent_files", []) or []
 
         for file in remembered_locations:
             if Path(file).is_file() and str(file) not in self.remembered_locations:
-                self.remembered_locations.append(str(file))
+                self.remembered_locations.add(str(file))
 
     def save_app_data(self):
 
-        main_folder = Path(__file__).resolve().parent.parent
-        data_file = main_folder / self.data_file
+        data_file = self.get_user_data_directory() / self.data_file
 
         history_data = self.df_history.save_history()
 
         self.notify_save()
 
         data = {
-            "recent_files": self.remembered_locations,
+            "recent_files": list(self.remembered_locations),
             "last_used_file": self.current_path,
             "history": history_data,
             "settings": self.settings
@@ -303,8 +326,7 @@ class ImputationManager:
         """
         Searches application data folder for .csv and .data. files
         """
-        main_folder = Path(__file__).resolve().parent.parent
-        data_folder = main_folder / self.data_folder
+        data_folder = self.get_user_data_directory() / self.data_folder
 
         if not data_folder.exists():
             data_folder.mkdir(parents=True, exist_ok=True)
@@ -312,7 +334,7 @@ class ImputationManager:
 
         for file in data_folder.iterdir():
             if file.is_file() and file.suffix.lower() in ['.csv', '.data'] and str(file) not in self.remembered_locations:
-                self.remembered_locations.append(str(file))
+                self.remembered_locations.add(str(file))
 
     def load_df(self, df, df_path, remembered = False):
 
@@ -320,13 +342,14 @@ class ImputationManager:
         self.current_path = df_path
         self.current_df = df
         self.original_df = df
+
+        if str(df_path) not in self.remembered_locations:
+            self.remembered_locations.add(str(df_path))
+
         if not remembered:
             self.df_history.clear_history()
             self.load_dataset_action()
             self.notify_change()
-
-        if str(df_path) not in self.remembered_locations:
-            self.remembered_locations.append(str(df_path))
 
     def mark_unusual_as_missing(self, report, unusual_tokens = None) -> None:
         if unusual_tokens is None:

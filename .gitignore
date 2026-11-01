@@ -23,3 +23,10 @@ data/
 
 #appdata
 app_data.json
+
+#installer
+build/
+dist/
+
+#Inno Setup
+Output/

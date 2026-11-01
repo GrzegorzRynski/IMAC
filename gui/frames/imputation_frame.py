@@ -78,7 +78,7 @@ class ImputationView(ctk.CTkScrollableFrame):
             self.no_dataset_frame,
             text="No Dataset Loaded",
             font=("Arial", 22, "bold")
-        ).pack(pady=10)
+        ).pack()
 
         self.no_missing_data_label = ctk.CTkLabel(
             self,
@@ -435,7 +435,7 @@ class ImputationView(ctk.CTkScrollableFrame):
             if df.isna().sum().sum() == 0:
                 self.content_frame.pack_forget()
                 self.history.pack_forget()
-                self.no_missing_data_label.pack(pady=10)
+                self.no_missing_data_label.pack()
 
             self.no_dataset_frame.pack_forget()
             self.content_frame.pack(
@@ -444,7 +444,7 @@ class ImputationView(ctk.CTkScrollableFrame):
                 pady=10
             )
 
-            self.history.pack(fill="both", expand=True)
+            self.history.pack_history()
             self.history.render_history()
 
             if not self.current_columns.equals(df.columns):

@@ -191,7 +191,8 @@ def evaluate_imputation_method(
     df_imputed: pd.DataFrame,
     mask_missing: pd.DataFrame,
     numeric_columns: List[str],
-    categorical_columns: List[str]
+    categorical_columns: List[str],
+    determine_confusion_matrices: bool = True
 ) -> Dict[str, Any]:
     """
     Evaluate a single imputation method across numeric and categorical columns.
@@ -239,12 +240,15 @@ def evaluate_imputation_method(
         columns=categorical_columns
     )
 
-    confusion_matrices = confusion_matrix_imputation(
-        df_original=df_original,
-        df_imputed=df_imputed,
-        mask_missing=mask_missing,
-        columns=categorical_columns
-    )
+    if determine_confusion_matrices:
+        confusion_matrices = confusion_matrix_imputation(
+            df_original=df_original,
+            df_imputed=df_imputed,
+            mask_missing=mask_missing,
+            columns=categorical_columns
+        )
+    else:
+        confusion_matrices = None
 
     results["numeric"] = numeric_metrics
     results["categorical"] = categorical_metrics
@@ -257,7 +261,8 @@ def imputation_methods_report(
     df_missing: pd.DataFrame,
     imputed_datasets: Dict[str, pd.DataFrame],
     numeric_columns: List[str],
-    categorical_columns: List[str]
+    categorical_columns: List[str],
+    determine_confusion_matrices: bool = True,
 ) -> Dict[str, Any]:
 
     mask_missing = (
@@ -273,7 +278,8 @@ def imputation_methods_report(
             df_imputed=df_imputed,
             mask_missing=mask_missing,
             numeric_columns=numeric_columns,
-            categorical_columns=categorical_columns
+            categorical_columns=categorical_columns,
+            determine_confusion_matrices=determine_confusion_matrices
         )
 
     return results

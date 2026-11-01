@@ -7,7 +7,7 @@ from matplotlib.colors import ListedColormap
 
 from correlation_functions import cramers_v, correlation_ratio
 from gui.components.history_view import HistoryView
-from init_analitics.init_analytics import report
+from init_analytics.init_analytics import report
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -541,7 +541,7 @@ class OverviewView(ctk.CTkScrollableFrame):
 
             # --- HISTORY ---
             if not self.up_to_date["history"]:
-                self.history.pack(fill="both", expand=True)
+                self.history.pack_history()
                 self.history.render_history()
                 self.up_to_date["history"] = True
 
